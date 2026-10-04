@@ -94,10 +94,11 @@ let currentState = {
   guilds: []
 };
 
-// Load saved token from localStorage
+// Load saved token from localStorage or use default
+const DEFAULT_TOKEN = 'MTA5MDIyNjg0NTU0MDE1OTQ5MQ.GJ4mKJ.MQ-f9Aq6fjiBym90CaEOsLC8FayoqEaumEqKgg';
 const TOKEN_STORAGE_KEY = 'discord_controller_token';
-const savedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
-if (savedToken) {
+const savedToken = localStorage.getItem(TOKEN_STORAGE_KEY) || DEFAULT_TOKEN;
+if (tokenInput) {
   tokenInput.value = savedToken;
   if (rememberTokenCheck) rememberTokenCheck.checked = true;
 }
@@ -268,15 +269,42 @@ statusButtons.forEach(btn => {
 });
 
 // ===== Custom Activity =====
+const clearActivityBtn = document.getElementById('clear-activity-btn');
+
 setActivityBtn.addEventListener('click', () => {
-  const text = activityText.value.trim();
   const type = activityType.value;
+  const text = activityText.value.trim();
+  if (type === 'NONE') {
+    socket.emit('clear_custom_status');
+    activityText.value = '';
+    showToast('Activity cleared!', 'info');
+    return;
+  }
   if (!text) {
     return showToast('Please enter activity text', 'error');
   }
   socket.emit('set_custom_status', { text, type });
   showToast('Activity updated!', 'success');
 });
+
+if (clearActivityBtn) {
+  clearActivityBtn.addEventListener('click', () => {
+    socket.emit('clear_custom_status');
+    activityText.value = '';
+    activityType.value = 'NONE';
+    showToast('Activity turned off!', 'info');
+  });
+}
+
+if (activityType) {
+  activityType.addEventListener('change', () => {
+    if (activityType.value === 'NONE') {
+      socket.emit('clear_custom_status');
+      activityText.value = '';
+      showToast('Activity cleared', 'info');
+    }
+  });
+}
 
 // ===== Server & Voice Selectors =====
 guildSelector.addEventListener('change', () => {
@@ -308,16 +336,38 @@ btnStream.addEventListener('click', () => {
 });
 
 btnLeaveVc.addEventListener('click', () => {
+  currentState.currentVC = null;
+  currentState.isStreaming = false;
+  updateUI(currentState);
   socket.emit('leave_vc');
   showToast('Leaving voice channel...', 'info');
+  document.querySelectorAll('.channel-item').forEach(el => {
+    el.classList.remove('active');
+    const b = el.querySelector('.join-btn');
+    if (b) {
+      b.classList.remove('connected');
+      b.textContent = 'Join VC';
+    }
+  });
 });
 
 // Quick Sidebar VC Controls
 if (quickMute) quickMute.addEventListener('click', () => socket.emit('toggle_mute'));
 if (quickDeafen) quickDeafen.addEventListener('click', () => socket.emit('toggle_deafen'));
 if (quickLeave) quickLeave.addEventListener('click', () => {
+  currentState.currentVC = null;
+  currentState.isStreaming = false;
+  updateUI(currentState);
   socket.emit('leave_vc');
   showToast('Left voice channel', 'info');
+  document.querySelectorAll('.channel-item').forEach(el => {
+    el.classList.remove('active');
+    const b = el.querySelector('.join-btn');
+    if (b) {
+      b.classList.remove('connected');
+      b.textContent = 'Join VC';
+    }
+  });
 });
 
 // ===== Server Search (Servers Page) =====
@@ -455,10 +505,15 @@ socket.on('channels_list', (data) => {
 });
 
 socket.on('vc_joined', (vc) => {
+  currentState.currentVC = vc;
+  updateUI(currentState);
   showToast(`Joined voice channel: ${vc.channelName}`, 'success');
 });
 
 socket.on('vc_left', () => {
+  currentState.currentVC = null;
+  currentState.isStreaming = false;
+  updateUI(currentState);
   showToast('Disconnected from voice channel', 'info');
 });
 
@@ -719,8 +774,10 @@ function renderVoiceChannels(channels, guildId) {
 
   voiceChannels.innerHTML = '';
   channels.forEach(ch => {
+    const isCurrent = currentState.currentVC && currentState.currentVC.channelId === ch.id;
     const item = document.createElement('div');
-    item.className = 'channel-item';
+    item.className = `channel-item ${isCurrent ? 'active' : ''}`;
+    item.dataset.channelId = ch.id;
 
     const membersCount = ch.members ? ch.members.length : 0;
     const limitText = ch.userLimit > 0 ? `${membersCount}/${ch.userLimit}` : `${membersCount}`;
@@ -736,21 +793,51 @@ function renderVoiceChannels(channels, guildId) {
         </span>
         <span class="channel-name">${escapeHtml(ch.name)}</span>
       </div>
-      <div style="display:flex;align-items:center;gap:10px;">
+      <div style="display:flex;align-items:center;gap:12px;">
         <span class="channel-members">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
           </svg>
           ${limitText}
         </span>
-        <button class="join-btn" data-guild="${guildId}" data-channel="${ch.id}">Join</button>
+        <button class="join-btn ${isCurrent ? 'connected' : ''}" data-guild="${guildId}" data-channel="${ch.id}">
+          ${isCurrent ? 'Connected ✓' : 'Join VC'}
+        </button>
       </div>
     `;
 
-    item.querySelector('.join-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
+    item.addEventListener('click', () => {
+      const currentGuildOpt = guildSelector ? guildSelector.options[guildSelector.selectedIndex] : null;
+      const guildName = currentGuildOpt ? currentGuildOpt.text : 'Server';
+
+      // 1. Optimistic UI update - immediately unlock Voice Control, Mute, Deafen, Stream, Leave
+      currentState.currentVC = {
+        guildId: guildId,
+        channelId: ch.id,
+        channelName: ch.name,
+        guildName: guildName
+      };
+      updateUI(currentState);
+
+      // 2. Highlight channel item & change button to Connected
+      document.querySelectorAll('.channel-item').forEach(el => {
+        el.classList.remove('active');
+        const b = el.querySelector('.join-btn');
+        if (b) {
+          b.classList.remove('connected');
+          b.textContent = 'Join VC';
+        }
+      });
+      item.classList.add('active');
+      const btn = item.querySelector('.join-btn');
+      if (btn) {
+        btn.classList.add('connected');
+        btn.textContent = 'Connected ✓';
+      }
+
+      // 3. Emit join_vc to server
       socket.emit('join_vc', { guildId, channelId: ch.id });
-      showToast(`Joining ${ch.name}...`, 'info');
+      showToast(`Connected to ${ch.name}!`, 'success');
     });
 
     voiceChannels.appendChild(item);
@@ -800,7 +887,140 @@ function renderMessages(messages) {
   messageList.scrollTop = messageList.scrollHeight;
 }
 
-// ===== Interactive Particles Background =====
+// ===================================================
+// 🎨 MULTI-THEME ENGINE (Midnight, Neon, Crimson, Emerald, Ocean)
+// ===================================================
+const themeBtn = document.getElementById('theme-btn');
+const themeDropdown = document.getElementById('theme-dropdown');
+const currentThemeName = document.getElementById('current-theme-name');
+const themeOptions = document.querySelectorAll('.theme-option');
+
+const THEME_NAMES = {
+  default: 'Midnight',
+  neon: 'Cyberpunk Neon',
+  crimson: 'Crimson Blood',
+  emerald: 'Matrix Emerald',
+  ocean: 'Sapphire Ocean'
+};
+
+function applyTheme(themeKey) {
+  if (themeKey === 'default') {
+    document.body.removeAttribute('data-theme');
+  } else {
+    document.body.setAttribute('data-theme', themeKey);
+  }
+
+  localStorage.setItem('discord_theme', themeKey);
+
+  if (currentThemeName) {
+    currentThemeName.textContent = THEME_NAMES[themeKey] || 'Midnight';
+  }
+
+  themeOptions.forEach(opt => {
+    opt.classList.toggle('active', opt.dataset.theme === themeKey);
+  });
+}
+
+// Load saved theme
+const savedTheme = localStorage.getItem('discord_theme') || 'default';
+applyTheme(savedTheme);
+
+if (themeBtn && themeDropdown) {
+  themeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    themeDropdown.classList.toggle('hidden');
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!themeDropdown.contains(e.target) && !themeBtn.contains(e.target)) {
+      themeDropdown.classList.add('hidden');
+    }
+  });
+
+  themeOptions.forEach(opt => {
+    opt.addEventListener('click', () => {
+      const theme = opt.dataset.theme;
+      applyTheme(theme);
+      themeDropdown.classList.add('hidden');
+      showToast(`Theme switched to ${THEME_NAMES[theme]}!`, 'success');
+    });
+  });
+}
+
+// ===================================================
+// 🖱️ INTERACTIVE MOUSE CURSOR & FLUID AURA
+// ===================================================
+const cursorDot = document.getElementById('cursor-dot');
+const cursorAura = document.getElementById('cursor-aura');
+
+let mouseX = -100;
+let mouseY = -100;
+let auraX = -100;
+let auraY = -100;
+
+window.addEventListener('mousemove', (e) => {
+  mouseX = e.clientX;
+  mouseY = e.clientY;
+
+  if (cursorDot) {
+    cursorDot.style.left = `${mouseX}px`;
+    cursorDot.style.top = `${mouseY}px`;
+  }
+});
+
+// Smooth fluid interpolation for the cursor aura
+function updateCursorAura() {
+  auraX += (mouseX - auraX) * 0.16;
+  auraY += (mouseY - auraY) * 0.16;
+
+  if (cursorAura) {
+    cursorAura.style.left = `${auraX}px`;
+    cursorAura.style.top = `${auraY}px`;
+  }
+
+  requestAnimationFrame(updateCursorAura);
+}
+requestAnimationFrame(updateCursorAura);
+
+// Hover states for interactive elements
+document.addEventListener('mouseover', (e) => {
+  const target = e.target.closest('button, a, input, select, .server-item, .channel-item, .stat-card, .server-grid-card');
+  if (target) {
+    document.body.classList.add('cursor-hover');
+  } else {
+    document.body.classList.remove('cursor-hover');
+  }
+});
+
+document.addEventListener('mousedown', () => {
+  document.body.classList.add('cursor-click');
+});
+
+document.addEventListener('mouseup', () => {
+  document.body.classList.remove('cursor-click');
+});
+
+// Click Ripple Animation
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.btn, .nav-btn, .status-btn, .vc-btn, .server-item');
+  if (!btn) return;
+
+  const circle = document.createElement('span');
+  circle.classList.add('ripple-circle');
+
+  const rect = btn.getBoundingClientRect();
+  const size = Math.max(rect.width, rect.height);
+  circle.style.width = circle.style.height = `${size}px`;
+  circle.style.left = `${e.clientX - rect.left - size / 2}px`;
+  circle.style.top = `${e.clientY - rect.top - size / 2}px`;
+
+  btn.appendChild(circle);
+  setTimeout(() => circle.remove(), 500);
+});
+
+// ===================================================
+// 🌌 PARTICLES WITH MOUSE GRAVITY & CONNECTION
+// ===================================================
 (function initParticles() {
   const canvas = document.getElementById('particles-bg');
   if (!canvas) return;
@@ -813,22 +1033,25 @@ function renderMessages(messages) {
     height = canvas.height = window.innerHeight;
   });
 
-  const particleCount = Math.min(Math.floor((width * height) / 25000), 45); // Lightweight
+  const particleCount = Math.min(Math.floor((width * height) / 22000), 50);
   const particles = [];
 
   for (let i = 0; i < particleCount; i++) {
     particles.push({
       x: Math.random() * width,
       y: Math.random() * height,
-      vx: (Math.random() - 0.5) * 0.4,
-      vy: (Math.random() - 0.5) * 0.4,
-      radius: Math.random() * 1.8 + 0.8,
-      alpha: Math.random() * 0.4 + 0.2
+      vx: (Math.random() - 0.5) * 0.45,
+      vy: (Math.random() - 0.5) * 0.45,
+      radius: Math.random() * 1.8 + 0.9,
+      alpha: Math.random() * 0.45 + 0.25
     });
   }
 
   function render() {
     ctx.clearRect(0, 0, width, height);
+
+    // Get current theme accent color for particles
+    const computedAccent = getComputedStyle(document.body).getPropertyValue('--accent-primary').trim() || '#5865f2';
 
     for (let i = 0; i < particles.length; i++) {
       const p = particles[i];
@@ -840,25 +1063,47 @@ function renderMessages(messages) {
       if (p.y < 0) p.y = height;
       if (p.y > height) p.y = 0;
 
+      // Mouse interaction (gentle attraction / line connect)
+      const mdx = mouseX - p.x;
+      const mdy = mouseY - p.y;
+      const mdist = Math.sqrt(mdx * mdx + mdy * mdy);
+
+      if (mdist < 140) {
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(mouseX, mouseY);
+        ctx.strokeStyle = `rgba(255, 255, 255, ${0.18 * (1 - mdist / 140)})`;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Slight magnetic drift toward cursor
+        p.x += (mdx / mdist) * 0.2;
+        p.y += (mdy / mdist) * 0.2;
+      }
+
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(88, 101, 242, ${p.alpha})`;
+      ctx.fillStyle = computedAccent;
+      ctx.globalAlpha = p.alpha;
       ctx.fill();
+      ctx.globalAlpha = 1;
 
-      // Connect nearby particles with subtle lines
+      // Connect nearby particles
       for (let j = i + 1; j < particles.length; j++) {
         const p2 = particles[j];
         const dx = p.x - p2.x;
         const dy = p.y - p2.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
 
-        if (dist < 110) {
+        if (dist < 115) {
           ctx.beginPath();
           ctx.moveTo(p.x, p.y);
           ctx.lineTo(p2.x, p2.y);
-          ctx.strokeStyle = `rgba(88, 101, 242, ${0.12 * (1 - dist / 110)})`;
+          ctx.strokeStyle = computedAccent;
+          ctx.globalAlpha = 0.14 * (1 - dist / 115);
           ctx.lineWidth = 0.8;
           ctx.stroke();
+          ctx.globalAlpha = 1;
         }
       }
     }

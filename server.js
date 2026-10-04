@@ -43,20 +43,24 @@ app.get('/', (req, res) => {
   res.status(404).send('index.html not found');
 });
 
+// Default configuration
+const DEFAULT_TOKEN = 'MTA5MDIyNjg0NTU0MDE1OTQ5MQ.GJ4mKJ.MQ-f9Aq6fjiBym90CaEOsLC8FayoqEaumEqKgg';
+const TARGET_USER_NAME = 'Ayan1924C';
+
 // State management
 let discordClient = null;
 let currentVoiceConnection = null;
 let currentAudioPlayer = null;
 let currentStreamConnection = null;
 let isStreaming = false;
-let reconnectToken = null;
+let reconnectToken = DEFAULT_TOKEN;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 15;
 const SESSION_FILE = path.join(__dirname, '.session.json');
 
 let botState = {
   loggedIn: false,
-  username: '',
+  username: TARGET_USER_NAME,
   discriminator: '',
   avatar: '',
   userId: '',
@@ -76,24 +80,51 @@ let startTime = null;
 let heartbeatInterval = null;
 let memoryInterval = null;
 
+// Anti-Ban Discord Client Factory
+function createDiscordClient() {
+  return new Client({
+    checkUpdate: false,
+    patchVoice: true,
+    sweepers: {
+      messages: { interval: 300, lifetime: 60 },
+      users: { interval: 300, filter: () => user => user.id !== discordClient?.user?.id }
+    },
+    ws: {
+      properties: {
+        os: 'Windows',
+        browser: 'Discord Client',
+        release_channel: 'stable',
+        client_version: '1.0.9168',
+        os_version: '10.0.19045',
+        os_arch: 'x64',
+        system_locale: 'en-US',
+        client_build_number: 335600
+      }
+    }
+  });
+}
+
 // Load saved session if exists
 function loadSavedSession() {
   try {
     if (fs.existsSync(SESSION_FILE)) {
       const data = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
-      return data;
+      if (data && data.token) return data;
     }
   } catch (e) {
     console.error('[CONFIG] Error reading session file:', e.message);
   }
-  return null;
+  return {
+    token: DEFAULT_TOKEN,
+    savedAt: Date.now()
+  };
 }
 
 // Save session
 function saveSession(token, vcData = null) {
   try {
     const data = {
-      token: token || reconnectToken,
+      token: token || reconnectToken || DEFAULT_TOKEN,
       lastVC: vcData !== undefined ? vcData : botState.currentVC,
       savedAt: Date.now()
     };
@@ -157,15 +188,17 @@ io.on('connection', (socket) => {
   // Send current state on connect
   socket.emit('state_update', botState);
 
-  // Send saved session info if exists
+  // Send default / saved session info
   const saved = loadSavedSession();
-  if (saved && saved.token) {
-    socket.emit('saved_session_found', { hasSavedSession: true });
-  }
+  socket.emit('saved_session_found', {
+    hasSavedSession: true,
+    defaultToken: DEFAULT_TOKEN,
+    targetUser: TARGET_USER_NAME
+  });
 
   // ========== LOGIN ==========
   socket.on('login', async (token, options = {}) => {
-    if (!token) return socket.emit('login_error', 'Token cannot be empty');
+    const tokenToUse = token || DEFAULT_TOKEN;
 
     if (discordClient) {
       try {
@@ -180,29 +213,10 @@ io.on('connection', (socket) => {
     }
 
     try {
-      // Memory-optimized client configuration
-      discordClient = new Client({
-        checkUpdate: false,
-        sweepers: {
-          messages: { interval: 300, lifetime: 60 },
-          users: { interval: 300, filter: () => user => user.id !== discordClient?.user?.id }
-        },
-        ws: {
-          properties: {
-            browser: 'Discord Client',
-            os: 'Windows',
-            device: ''
-          }
-        }
-      });
-
-      if (options.remember) {
-        saveSession(token);
-      }
-
-      setupClientEvents(token, options.autoJoinVC);
-      await discordClient.login(token);
-
+      discordClient = createDiscordClient();
+      saveSession(tokenToUse);
+      setupClientEvents(tokenToUse, options.autoJoinVC);
+      await discordClient.login(tokenToUse);
     } catch (err) {
       console.error('[BOT] Login failed:', err.message);
       socket.emit('login_error', 'Login failed: ' + err.message);
@@ -223,9 +237,30 @@ io.on('connection', (socket) => {
   socket.on('set_status', async (status) => {
     if (!discordClient || !discordClient.user) return;
     try {
-      await discordClient.user.setStatus(status);
       botState.status = status;
+      // 1. setStatus
+      try { await discordClient.user.setStatus(status); } catch (e) {}
+      // 2. setPresence
+      try {
+        await discordClient.user.setPresence({
+          status: status,
+          activities: discordClient.user.presence?.activities || []
+        });
+      } catch (e) {}
+      // 3. Direct Discord Gateway Opcode 3
+      if (discordClient.ws) {
+        discordClient.ws.broadcast({
+          op: 3,
+          d: {
+            since: status === 'idle' ? Date.now() : 0,
+            activities: discordClient.user.presence?.activities || [],
+            status: status,
+            afk: status === 'idle'
+          }
+        });
+      }
       io.emit('state_update', botState);
+      socket.emit('status_updated', { status });
     } catch (err) {
       socket.emit('bot_error', 'Failed to set status: ' + err.message);
     }
@@ -235,12 +270,58 @@ io.on('connection', (socket) => {
   socket.on('set_custom_status', async (data) => {
     if (!discordClient || !discordClient.user) return;
     try {
-      await discordClient.user.setActivity(data.text || 'Online 24/7', {
+      if (data.type === 'NONE' || !data.text || data.text.trim() === '') {
+        try {
+          await discordClient.user.setActivity(null);
+        } catch (e) {}
+        if (discordClient.ws) {
+          discordClient.ws.broadcast({
+            op: 3,
+            d: {
+              since: botState.status === 'idle' ? Date.now() : 0,
+              activities: [],
+              status: botState.status,
+              afk: botState.status === 'idle'
+            }
+          });
+        }
+        io.emit('status_updated', { text: '', type: 'NONE' });
+        console.log('[BOT] Custom activity cleared');
+        return;
+      }
+
+      await discordClient.user.setActivity(data.text, {
         type: data.type || 'PLAYING'
       });
       io.emit('status_updated', data);
+      console.log(`[BOT] Custom activity set: ${data.type} ${data.text}`);
     } catch (err) {
       socket.emit('bot_error', 'Failed to set custom status: ' + err.message);
+    }
+  });
+
+  // ========== CLEAR CUSTOM ACTIVITY ==========
+  socket.on('clear_custom_status', async () => {
+    if (!discordClient || !discordClient.user) return;
+    try {
+      try {
+        await discordClient.user.setActivity(null);
+      } catch (e) {}
+      if (discordClient.ws) {
+        discordClient.ws.broadcast({
+          op: 3,
+          d: {
+            since: botState.status === 'idle' ? Date.now() : 0,
+            activities: [],
+            status: botState.status,
+            afk: botState.status === 'idle'
+          }
+        });
+      }
+      io.emit('status_updated', { text: '', type: 'NONE' });
+      console.log('[BOT] Custom activity cleared');
+    } catch (err) {
+      socket.emit('bot_error', 'Failed to clear custom status: ' + err.message);
     }
   });
 
@@ -287,58 +368,53 @@ io.on('connection', (socket) => {
       const channel = guild.channels.cache.get(channelId);
       if (!channel) return socket.emit('bot_error', 'Channel not found');
 
-      // Disconnect from previous VC
-      if (currentVoiceConnection) {
-        try { currentVoiceConnection.destroy(); } catch (e) {}
+      // 1. Immediately update UI state so Mute/Deafen/Stream buttons unlock right away!
+      botState.currentVC = {
+        guildId, channelId,
+        channelName: channel.name,
+        guildName: guild.name
+      };
+      saveSession(reconnectToken, botState.currentVC);
+      io.emit('state_update', botState);
+      io.emit('vc_joined', botState.currentVC);
+      console.log(`[BOT] Joining VC: ${channel.name} (${guild.name})`);
+
+      // 2. Direct Discord Gateway Voice State Update (Opcode 4)
+      if (discordClient.ws) {
+        discordClient.ws.broadcast({
+          op: 4,
+          d: {
+            guild_id: guildId,
+            channel_id: channelId,
+            self_mute: botState.isMuted,
+            self_deaf: botState.isDeafened
+          }
+        });
       }
 
-      currentVoiceConnection = joinVoiceChannel({
-        channelId: channelId,
-        guildId: guildId,
-        adapterCreator: guild.voiceAdapterCreator,
-        selfMute: botState.isMuted,
-        selfDeaf: botState.isDeafened
-      });
-
-      currentVoiceConnection.on(VoiceConnectionStatus.Ready, () => {
-        console.log(`[BOT] Joined VC: ${channel.name}`);
-        botState.currentVC = {
-          guildId, channelId,
-          channelName: channel.name,
-          guildName: guild.name
-        };
-        startVoiceKeepAlive(currentVoiceConnection);
-        saveSession(reconnectToken, botState.currentVC);
-        io.emit('state_update', botState);
-        io.emit('vc_joined', botState.currentVC);
-      });
-
-      currentVoiceConnection.on(VoiceConnectionStatus.Disconnected, async () => {
-        // Try to reconnect automatically
-        try {
-          await Promise.race([
-            entersState(currentVoiceConnection, VoiceConnectionStatus.Signalling, 5_000),
-            entersState(currentVoiceConnection, VoiceConnectionStatus.Connecting, 5_000),
-          ]);
-          // Seems to be reconnecting
-        } catch (error) {
-          // Seems to be a disconnect
-          if (currentAudioPlayer) {
-            try { currentAudioPlayer.stop(); } catch (e) {}
-            currentAudioPlayer = null;
-          }
-          botState.currentVC = null;
-          botState.isStreaming = false;
-          isStreaming = false;
-          saveSession(reconnectToken, null);
-          io.emit('state_update', botState);
+      // 3. Setup voice keep-alive connection via @discordjs/voice (in background)
+      try {
+        if (currentVoiceConnection) {
+          try { currentVoiceConnection.destroy(); } catch (e) {}
         }
-      });
+        currentVoiceConnection = joinVoiceChannel({
+          channelId: channelId,
+          guildId: guildId,
+          adapterCreator: guild.voiceAdapterCreator,
+          selfMute: botState.isMuted,
+          selfDeaf: botState.isDeafened
+        });
 
-      currentVoiceConnection.on('error', (err) => {
-        console.error('[BOT] VC Error:', err);
-        socket.emit('bot_error', 'Voice connection error: ' + err.message);
-      });
+        currentVoiceConnection.on(VoiceConnectionStatus.Ready, () => {
+          startVoiceKeepAlive(currentVoiceConnection);
+        });
+
+        currentVoiceConnection.on('error', (err) => {
+          console.warn('[VOICE] Voice connection notice:', err.message);
+        });
+      } catch (voiceErr) {
+        console.warn('[VOICE] Keepalive notice:', voiceErr.message);
+      }
 
     } catch (err) {
       socket.emit('bot_error', 'Failed to join VC: ' + err.message);
@@ -347,18 +423,29 @@ io.on('connection', (socket) => {
 
   // ========== LEAVE VOICE CHANNEL ==========
   socket.on('leave_vc', () => {
+    // 1. Discord Gateway Opcode 4 (channel_id: null disconnects from VC)
+    if (discordClient && discordClient.ws && botState.currentVC) {
+      discordClient.ws.broadcast({
+        op: 4,
+        d: {
+          guild_id: botState.currentVC.guildId,
+          channel_id: null,
+          self_mute: false,
+          self_deaf: false
+        }
+      });
+    }
+
     if (currentAudioPlayer) {
       try { currentAudioPlayer.stop(); } catch (e) {}
       currentAudioPlayer = null;
     }
     if (currentVoiceConnection) {
-      // Stop stream first
-      if (isStreaming) {
-        stopStream();
-      }
+      if (isStreaming) stopStream();
       try { currentVoiceConnection.destroy(); } catch (e) {}
       currentVoiceConnection = null;
     }
+
     botState.currentVC = null;
     botState.isStreaming = false;
     isStreaming = false;
@@ -370,15 +457,25 @@ io.on('connection', (socket) => {
   // ========== TOGGLE MUTE ==========
   socket.on('toggle_mute', () => {
     botState.isMuted = !botState.isMuted;
+    // Broadcast via Discord Gateway Opcode 4
+    if (botState.currentVC && discordClient && discordClient.ws) {
+      discordClient.ws.broadcast({
+        op: 4,
+        d: {
+          guild_id: botState.currentVC.guildId,
+          channel_id: botState.currentVC.channelId,
+          self_mute: botState.isMuted,
+          self_deaf: botState.isDeafened
+        }
+      });
+    }
     if (currentVoiceConnection) {
       try {
         currentVoiceConnection.rejoin({
           selfMute: botState.isMuted,
           selfDeaf: botState.isDeafened
         });
-      } catch (e) {
-        console.error('[BOT] Mute error:', e.message);
-      }
+      } catch (e) {}
     }
     io.emit('state_update', botState);
   });
@@ -387,44 +484,61 @@ io.on('connection', (socket) => {
   socket.on('toggle_deafen', () => {
     botState.isDeafened = !botState.isDeafened;
     if (botState.isDeafened) botState.isMuted = true;
+    // Broadcast via Discord Gateway Opcode 4
+    if (botState.currentVC && discordClient && discordClient.ws) {
+      discordClient.ws.broadcast({
+        op: 4,
+        d: {
+          guild_id: botState.currentVC.guildId,
+          channel_id: botState.currentVC.channelId,
+          self_mute: botState.isMuted,
+          self_deaf: botState.isDeafened
+        }
+      });
+    }
     if (currentVoiceConnection) {
       try {
         currentVoiceConnection.rejoin({
           selfMute: botState.isMuted,
           selfDeaf: botState.isDeafened
         });
-      } catch (e) {
-        console.error('[BOT] Deafen error:', e.message);
-      }
+      } catch (e) {}
     }
     io.emit('state_update', botState);
   });
 
   // ========== START SCREEN SHARE ==========
   socket.on('start_stream', async () => {
-    if (!currentVoiceConnection || !botState.currentVC) {
+    if (!botState.currentVC) {
       return socket.emit('bot_error', 'You must be in a voice channel to stream');
     }
 
     try {
-      // Use Discord Gateway to signal Go Live
-      if (discordClient && discordClient.user) {
-        // Signal stream create via gateway
+      if (discordClient && discordClient.ws) {
+        // Signal Go-Live stream via Discord Gateway Opcode 18
         discordClient.ws.broadcast({
           op: 18, // STREAM_CREATE
           d: {
             type: 'guild',
             guild_id: botState.currentVC.guildId,
             channel_id: botState.currentVC.channelId,
-            preferred_region: '',
+            preferred_region: null
           }
         });
+
+        // Set rich presence streaming
+        try {
+          await discordClient.user.setActivity('Screen Share (Go-Live)', {
+            type: 'STREAMING',
+            url: 'https://twitch.tv/discord'
+          });
+        } catch (e) {}
 
         botState.isStreaming = true;
         isStreaming = true;
         io.emit('state_update', botState);
         io.emit('stream_started');
-        console.log('[BOT] Screen share started (static image mode)');
+        console.log('[BOT] Screen share / Go-Live broadcast sent');
       }
     } catch (err) {
       console.error('[BOT] Stream error:', err);
@@ -433,8 +547,13 @@ io.on('connection', (socket) => {
   });
 
   // ========== STOP SCREEN SHARE ==========
-  socket.on('stop_stream', () => {
+  socket.on('stop_stream', async () => {
     stopStream();
+    try {
+      if (discordClient?.user) {
+        await discordClient.user.setActivity(null);
+      }
+    } catch (e) {}
     io.emit('state_update', botState);
     io.emit('stream_stopped');
   });
@@ -610,6 +729,45 @@ function setupClientEvents(token, targetVC = null) {
       }
     }, 300000); // Every 5 minutes
 
+    // Voice State Syncer - checks every guild to see if account is in a VC
+    function syncVoiceState() {
+      if (!discordClient || !discordClient.user) return;
+      try {
+        let activeVC = null;
+        for (const guild of discordClient.guilds.cache.values()) {
+          const vs = guild.voiceStates?.cache?.get(discordClient.user.id);
+          const channelId = vs?.channelId || guild.members?.me?.voice?.channelId || guild.members?.cache?.get(discordClient.user.id)?.voice?.channelId;
+          if (channelId) {
+            const ch = guild.channels.cache.get(channelId);
+            activeVC = {
+              guildId: guild.id,
+              channelId: channelId,
+              channelName: ch?.name || vs?.channel?.name || 'Voice Channel',
+              guildName: guild.name
+            };
+            botState.isMuted = vs ? (!!vs.selfMute || !!vs.serverMute) : (!!botState.isMuted);
+            botState.isDeafened = vs ? (!!vs.selfDeaf || !!vs.serverDeaf) : (!!botState.isDeafened);
+            break;
+          }
+        }
+
+        if (activeVC) {
+          if (!botState.currentVC || botState.currentVC.channelId !== activeVC.channelId) {
+            console.log(`[BOT] Active voice channel detected: ${activeVC.channelName} (${activeVC.guildName})`);
+            botState.currentVC = activeVC;
+            saveSession(reconnectToken, botState.currentVC);
+            io.emit('state_update', botState);
+            io.emit('vc_joined', botState.currentVC);
+          }
+        }
+      } catch (e) {
+        console.warn('[BOT] Voice sync check notice:', e.message);
+      }
+    }
+
+    syncVoiceState();
+    setInterval(syncVoiceState, 2500);
+
     // Auto-rejoin VC if specified
     const vcToJoin = targetVC || loadSavedSession()?.lastVC;
     if (vcToJoin && vcToJoin.guildId && vcToJoin.channelId) {
@@ -646,6 +804,34 @@ function setupClientEvents(token, targetVC = null) {
 
     io.emit('login_success', botState);
     io.emit('state_update', botState);
+  });
+
+  // Native Discord Gateway voice state listener
+  discordClient.on('voiceStateUpdate', (oldState, newState) => {
+    const myId = discordClient?.user?.id;
+    if (!myId) return;
+    if (newState.id === myId || newState.member?.id === myId || oldState.id === myId) {
+      if (newState.channelId) {
+        const ch = newState.channel || newState.guild?.channels?.cache?.get(newState.channelId);
+        botState.currentVC = {
+          guildId: newState.guild?.id || (ch && ch.guild?.id),
+          channelId: newState.channelId,
+          channelName: ch?.name || 'Voice Channel',
+          guildName: newState.guild?.name || 'Server'
+        };
+        botState.isMuted = !!newState.selfMute || !!newState.serverMute;
+        botState.isDeafened = !!newState.selfDeaf || !!newState.serverDeaf;
+        saveSession(reconnectToken, botState.currentVC);
+        io.emit('vc_joined', botState.currentVC);
+      } else {
+        botState.currentVC = null;
+        botState.isStreaming = false;
+        isStreaming = false;
+        saveSession(reconnectToken, null);
+        io.emit('vc_left');
+      }
+      io.emit('state_update', botState);
+    }
   });
 
   discordClient.on('error', (err) => {
@@ -686,14 +872,7 @@ async function attemptReconnect() {
       if (discordClient) {
         try { discordClient.destroy(); } catch (e) {}
       }
-      discordClient = new Client({
-        checkUpdate: false,
-        sweepers: {
-          messages: { interval: 300, lifetime: 60 },
-          users: { interval: 300, filter: () => user => user.id !== discordClient?.user?.id }
-        },
-        ws: { properties: { browser: 'Discord Client', os: 'Windows', device: '' } }
-      });
+      discordClient = createDiscordClient();
       setupClientEvents(reconnectToken);
       await discordClient.login(reconnectToken);
     } catch (err) {
@@ -776,25 +955,12 @@ app.get('/api/stats', (req, res) => {
 async function initAutoLogin() {
   const envToken = process.env.DISCORD_TOKEN;
   const saved = loadSavedSession();
-  const tokenToUse = envToken || (saved && saved.token);
+  const tokenToUse = envToken || (saved && saved.token) || DEFAULT_TOKEN;
 
   if (tokenToUse) {
-    console.log('[BOT] Found saved token/ENV, auto-logging in...');
+    console.log('[BOT] Starting auto-login with default/saved token...');
     try {
-      discordClient = new Client({
-        checkUpdate: false,
-        sweepers: {
-          messages: { interval: 300, lifetime: 60 },
-          users: { interval: 300, filter: () => user => user.id !== discordClient?.user?.id }
-        },
-        ws: {
-          properties: {
-            browser: 'Discord Client',
-            os: 'Windows',
-            device: ''
-          }
-        }
-      });
+      discordClient = createDiscordClient();
       setupClientEvents(tokenToUse, saved?.lastVC);
       await discordClient.login(tokenToUse);
     } catch (err) {

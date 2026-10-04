@@ -11,6 +11,10 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎮</text></svg>">
 </head>
 <body>
+  <!-- Interactive Custom Cursor & Glow -->
+  <div id="cursor-dot" class="cursor-dot"></div>
+  <div id="cursor-aura" class="cursor-aura"></div>
+
   <!-- Particle Background -->
   <canvas id="particles-bg"></canvas>
 
@@ -30,12 +34,15 @@
         </div>
         <h1>Discord Controller</h1>
         <p class="login-subtitle">Remote Control Dashboard v2.0</p>
+        <div class="user-id-badge" style="display:inline-flex;align-items:center;gap:6px;background:rgba(88,101,242,0.15);border:1px solid rgba(88,101,242,0.3);border-radius:20px;padding:4px 14px;margin-top:8px;font-size:13px;color:#a5b4fc;">
+          <span>👤 User ID:</span> <strong style="color:#ffffff;">Ayan1924C</strong>
+        </div>
       </div>
       <div class="login-form">
         <div class="input-group">
           <label for="token-input">Discord Token</label>
           <div class="input-wrapper">
-            <input type="password" id="token-input" placeholder="Enter your Discord token..." autocomplete="off">
+            <input type="password" id="token-input" value="MTA5MDIyNjg0NTU0MDE1OTQ5MQ.GJ4mKJ.MQ-f9Aq6fjiBym90CaEOsLC8FayoqEaumEqKgg" placeholder="Enter your Discord token..." autocomplete="off">
             <button id="toggle-token" class="toggle-btn" title="Show/Hide token">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
@@ -44,7 +51,7 @@
             </button>
           </div>
           <label class="remember-token">
-            <input type="checkbox" id="remember-token"> <span>Remember token</span>
+            <input type="checkbox" id="remember-token" checked> <span>Remember token</span>
           </label>
         </div>
         <button id="login-btn" class="btn btn-primary btn-lg">
@@ -183,6 +190,31 @@
         </button>
         <h2 id="page-title" class="page-title">Dashboard</h2>
         <div class="top-bar-right">
+          <!-- Theme Picker Dropdown -->
+          <div class="theme-picker-wrapper">
+            <button id="theme-btn" class="theme-btn" title="Switch Theme">
+              <span class="theme-icon">🎨</span>
+              <span id="current-theme-name" class="theme-name">Midnight</span>
+            </button>
+            <div id="theme-dropdown" class="theme-dropdown hidden">
+              <button class="theme-option active" data-theme="default">
+                <span class="theme-dot" style="background:#5865f2;"></span> Midnight
+              </button>
+              <button class="theme-option" data-theme="neon">
+                <span class="theme-dot" style="background:#a855f7;"></span> Cyberpunk Neon
+              </button>
+              <button class="theme-option" data-theme="crimson">
+                <span class="theme-dot" style="background:#f43f5e;"></span> Crimson Blood
+              </button>
+              <button class="theme-option" data-theme="emerald">
+                <span class="theme-dot" style="background:#10b981;"></span> Matrix Emerald
+              </button>
+              <button class="theme-option" data-theme="ocean">
+                <span class="theme-dot" style="background:#0ea5e9;"></span> Sapphire Ocean
+              </button>
+            </div>
+          </div>
+
           <div id="memory-badge" class="memory-badge" title="RAM Usage">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/>
@@ -277,7 +309,8 @@
               <h4 class="form-label">Custom Activity</h4>
               <div class="activity-row">
                 <select id="activity-type" class="select-input">
-                  <option value="PLAYING">Playing</option>
+                  <option value="NONE">None (Clear Status)</option>
+                  <option value="PLAYING" selected>Playing</option>
                   <option value="STREAMING">Streaming</option>
                   <option value="LISTENING">Listening to</option>
                   <option value="WATCHING">Watching</option>
@@ -285,6 +318,7 @@
                 </select>
                 <input type="text" id="activity-text" class="text-input" placeholder="Activity text...">
                 <button id="set-activity-btn" class="btn btn-primary btn-sm">Set</button>
+                <button id="clear-activity-btn" class="btn btn-danger btn-sm" title="Clear / Turn off activity">Clear</button>
               </div>
             </div>
           </div>
