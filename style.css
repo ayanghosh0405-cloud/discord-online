@@ -2090,4 +2090,252 @@ body[data-theme="ocean"] {
   cursor: default;
 }
 
+/* ===== STREAMING PRESENCE & DISCORD PROFILE CARD ===== */
+.custom-status-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.form-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+
+.badge-purple {
+  background: rgba(145, 70, 255, 0.2);
+  color: #bf94ff;
+  border: 1px solid rgba(145, 70, 255, 0.4);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.activity-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.activity-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.field-hint {
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.streaming-options {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  background: rgba(89, 54, 149, 0.08);
+  border: 1px solid rgba(145, 70, 255, 0.25);
+  border-radius: var(--radius-md);
+  margin-top: 4px;
+  transition: var(--transition);
+  animation: fadeIn 0.25s ease;
+}
+
+.stream-photo-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.photo-input-group {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.photo-input-group .text-input {
+  flex: 1;
+  min-width: 220px;
+}
+
+.photo-hints-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.upload-status-text {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  min-height: 18px;
+  transition: var(--transition);
+}
+
+.upload-status-text.success {
+  color: var(--green);
+  font-weight: 600;
+}
+
+.upload-status-text.error {
+  color: var(--red);
+  font-weight: 600;
+}
+
+/* Discord Activity Card Live Preview (Exact match of Image 3 with custom photo!) */
+.discord-preview-wrap {
+  margin-top: 8px;
+}
+
+.discord-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.preview-badge-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #bf94ff;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.purple-stream-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #9146ff;
+  box-shadow: 0 0 10px rgba(145, 70, 255, 0.9);
+  display: inline-block;
+  animation: blink 2s ease-in-out infinite;
+}
+
+.discord-activity-card {
+  background: #11121d;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+  transition: var(--transition);
+}
+
+.discord-activity-card:hover {
+  border-color: rgba(145, 70, 255, 0.4);
+  box-shadow: 0 6px 24px rgba(145, 70, 255, 0.15);
+}
+
+.discord-activity-header {
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: #c9cdde;
+  margin-bottom: 12px;
+}
+
+.discord-activity-body {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.discord-activity-image-box {
+  width: 68px;
+  height: 68px;
+  min-width: 68px;
+  min-height: 68px;
+  border-radius: 10px;
+  overflow: hidden;
+  position: relative;
+  background: #1e1f2f;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.discord-activity-image-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.preview-placeholder-box {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #2b2d42;
+  color: #ffffff;
+}
+
+.preview-question-mark {
+  font-size: 2.2rem;
+  font-weight: 800;
+  opacity: 0.7;
+}
+
+.discord-activity-text-col {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow: hidden;
+  flex: 1;
+}
+
+.discord-activity-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.discord-activity-sub {
+  font-size: 0.82rem;
+  color: #b5bac1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.discord-activity-timer {
+  font-size: 0.75rem;
+  color: #949ba4;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.activity-actions .btn {
+  flex: 1;
+}
+
 

@@ -24,11 +24,68 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 
+// Body parsers for JSON and uploads
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ extended: true, limit: '25mb' }));
+
 // Serve static files (supports both root directory and public/assets folders)
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.static(__dirname));
 app.use('/assets', express.static(path.join(__dirname, 'assets')));
 app.use('/assets', express.static(__dirname));
+app.use('/uploads', express.static(path.join(__dirname, 'public', 'uploads')));
+
+// Image Upload Endpoint for Stream Photo / Rich Presence
+app.post('/api/upload-stream-image', async (req, res) => {
+  try {
+    const { image, filename } = req.body;
+    if (!image) {
+      return res.status(400).json({ success: false, error: 'No image provided' });
+    }
+    const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
+    const buffer = Buffer.from(base64Data, 'base64');
+
+    const ext = (filename && path.extname(filename)) || '.jpg';
+    const savedName = `stream_${Date.now()}${ext}`;
+    const uploadDir = path.join(__dirname, 'public', 'uploads');
+    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
+    const filePath = path.join(uploadDir, savedName);
+    fs.writeFileSync(filePath, buffer);
+
+    // Sync to stream.jpg so default stream previews update
+    try { fs.writeFileSync(path.join(__dirname, 'stream.jpg'), buffer); } catch(e) {}
+    try { fs.writeFileSync(path.join(__dirname, 'public', 'stream.jpg'), buffer); } catch(e) {}
+    try {
+      const assetsDir = path.join(__dirname, 'assets');
+      if (!fs.existsSync(assetsDir)) fs.mkdirSync(assetsDir, { recursive: true });
+      fs.writeFileSync(path.join(assetsDir, 'stream.jpg'), buffer);
+    } catch(e) {}
+
+    // If Discord client is online, upload directly to Discord to get a permanent CDN URL
+    let discordCdnUrl = null;
+    if (discordClient && discordClient.user) {
+      discordCdnUrl = await uploadToDiscordCdn(discordClient, buffer, savedName);
+    }
+
+    const localUrl = `/uploads/${savedName}`;
+    const finalUrl = discordCdnUrl || localUrl;
+
+    if (botState.streamConfig) {
+      botState.streamConfig.photo = finalUrl;
+    }
+
+    res.json({
+      success: true,
+      url: finalUrl,
+      localUrl: localUrl,
+      isDiscordCdn: !!discordCdnUrl
+    });
+  } catch (err) {
+    console.error('[UPLOAD] Image upload error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // Explicit route for homepage
 app.get('/', (req, res) => {
@@ -72,7 +129,15 @@ let botState = {
   isStreaming: false,
   uptime: 0,
   friends: [],
-  dmChannels: []
+  dmChannels: [],
+  customActivity: null,
+  streamConfig: {
+    title: '^ ANE WALA STAR !!',
+    photo: '/stream.jpg',
+    streamUrl: 'https://twitch.tv/discord',
+    details: 'Screen Share (Go-Live)',
+    state: ''
+  }
 };
 
 let uptimeInterval = null;
@@ -109,6 +174,12 @@ function loadSavedSession() {
   try {
     if (fs.existsSync(SESSION_FILE)) {
       const data = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
+      if (data && data.streamConfig) {
+        botState.streamConfig = { ...botState.streamConfig, ...data.streamConfig };
+      }
+      if (data && data.customActivity) {
+        botState.customActivity = data.customActivity;
+      }
       if (data && data.token) return data;
     }
   } catch (e) {
@@ -116,16 +187,21 @@ function loadSavedSession() {
   }
   return {
     token: DEFAULT_TOKEN,
-    savedAt: Date.now()
+    savedAt: Date.now(),
+    streamConfig: botState.streamConfig,
+    customActivity: botState.customActivity
   };
 }
 
 // Save session
-function saveSession(token, vcData = null) {
+function saveSession(token, vcData = null, streamConfig = null, customActivity = null) {
   try {
+    const existing = loadSavedSession() || {};
     const data = {
       token: token || reconnectToken || DEFAULT_TOKEN,
       lastVC: vcData !== undefined ? vcData : botState.currentVC,
+      streamConfig: streamConfig || botState.streamConfig || existing.streamConfig,
+      customActivity: customActivity !== undefined ? customActivity : (botState.customActivity || existing.customActivity),
       savedAt: Date.now()
     };
     fs.writeFileSync(SESSION_FILE, JSON.stringify(data, null, 2), 'utf8');
@@ -141,6 +217,181 @@ function clearSavedSession() {
       fs.unlinkSync(SESSION_FILE);
     }
   } catch (e) {}
+}
+
+// Upload buffer/file to Discord channel to get permanent native Discord CDN URL
+async function uploadToDiscordCdn(client, bufferOrPath, filename = 'stream.jpg') {
+  if (!client || !client.user) return null;
+  try {
+    let targetChannel = null;
+    // 1. Try finding DM channel
+    for (const ch of client.channels.cache.values()) {
+      if (ch.type === 'DM' || ch.type === 'GROUP_DM') {
+        targetChannel = ch;
+        break;
+      }
+    }
+    // 2. Try guild text channels with SEND_MESSAGES & ATTACH_FILES permissions
+    if (!targetChannel) {
+      for (const guild of client.guilds.cache.values()) {
+        const ch = guild.channels.cache.find(c =>
+          (c.type === 'GUILD_TEXT' || c.isText?.()) &&
+          c.permissionsFor?.(client.user)?.has('SEND_MESSAGES') &&
+          c.permissionsFor?.(client.user)?.has('ATTACH_FILES')
+        );
+        if (ch) {
+          targetChannel = ch;
+          break;
+        }
+      }
+    }
+    if (targetChannel) {
+      const sent = await targetChannel.send({
+        files: [{ attachment: bufferOrPath, name: filename }]
+      });
+      const url = sent.attachments?.first?.()?.url;
+      try { await sent.delete(); } catch(e) {}
+      if (url) {
+        console.log('[BOT] Stream photo uploaded to Discord CDN:', url);
+        return url;
+      }
+    }
+  } catch (err) {
+    console.warn('[BOT] Discord CDN upload notice:', err.message);
+  }
+  return null;
+}
+
+// Resolve any image URL or local path into Discord Gateway Rich Presence format (mp:attachments/... or asset ID)
+async function resolveRichPresenceImage(client, photoInput, appId = '383226320970055681') {
+  if (!photoInput || typeof photoInput !== 'string') return null;
+  let trimmed = photoInput.trim();
+  if (!trimmed) return null;
+
+  // Handle local path (/stream.jpg, /uploads/...)
+  if (trimmed.startsWith('/') || (!trimmed.startsWith('http') && !trimmed.startsWith('mp:') && fs.existsSync(path.join(__dirname, trimmed)))) {
+    const localFile = trimmed.startsWith('/') ? path.join(__dirname, 'public', trimmed) : path.join(__dirname, trimmed);
+    const fallbackFile = path.join(__dirname, 'stream.jpg');
+    const targetFile = fs.existsSync(localFile) ? localFile : fallbackFile;
+    if (fs.existsSync(targetFile) && client && client.user) {
+      const cdnUrl = await uploadToDiscordCdn(client, targetFile, path.basename(targetFile));
+      if (cdnUrl) {
+        trimmed = cdnUrl;
+      }
+    }
+  }
+
+  // Discord CDN or media link -> convert to mp:
+  if (trimmed.includes('cdn.discordapp.com/') || trimmed.includes('media.discordapp.net/')) {
+    return trimmed
+      .replace('https://cdn.discordapp.com/', 'mp:')
+      .replace('http://cdn.discordapp.com/', 'mp:')
+      .replace('https://media.discordapp.net/', 'mp:')
+      .replace('http://media.discordapp.net/', 'mp:');
+  }
+
+  // Already prefixed format
+  if (trimmed.startsWith('mp:') || trimmed.startsWith('external/')) {
+    return trimmed.startsWith('mp:') ? trimmed : `mp:${trimmed}`;
+  }
+
+  // Asset ID (numeric snowflake)
+  if (/^[0-9]{17,19}$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  // External URL -> try Discord external-assets proxy endpoint
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    if (client && client.token) {
+      try {
+        const { RichPresence } = require('discord.js-selfbot-v13');
+        const ext = await RichPresence.getExternal(client, appId, trimmed);
+        if (ext && ext.length && ext[0].external_asset_path) {
+          console.log('[BOT] External image proxied via Discord RPC:', ext[0].external_asset_path);
+          return `mp:${ext[0].external_asset_path}`;
+        }
+      } catch (err) {
+        console.warn('[BOT] External asset API note:', err.message);
+      }
+    }
+
+    // Secondary fallback: fetch buffer and upload to Discord channel
+    if (client && client.user) {
+      try {
+        const https = require('https');
+        const http = require('http');
+        const getter = trimmed.startsWith('https:') ? https : http;
+        const buffer = await new Promise((resolve, reject) => {
+          getter.get(trimmed, (res) => {
+            const chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.on('end', () => resolve(Buffer.concat(chunks)));
+            res.on('error', reject);
+          }).on('error', reject);
+        });
+        const cdnUrl = await uploadToDiscordCdn(client, buffer, 'stream_photo.jpg');
+        if (cdnUrl) {
+          return cdnUrl.replace('https://cdn.discordapp.com/', 'mp:');
+        }
+      } catch (e) {
+        console.warn('[BOT] External image download fallback notice:', e.message);
+      }
+    }
+  }
+
+  return trimmed;
+}
+
+// Apply streaming Rich Presence with custom title and photo
+async function applyStreamingPresence(client, options) {
+  if (!client || !client.user) return;
+  const { name, details, state, url, largeImage, largeText, smallImage, smallText } = options;
+
+  const activity = {
+    name: name || '^ ANE WALA STAR !!',
+    type: 1, // STREAMING
+    url: url || 'https://twitch.tv/discord',
+    flags: 1
+  };
+
+  if (details) activity.details = details;
+  if (state) activity.state = state;
+
+  if (largeImage || largeText || smallImage || smallText) {
+    activity.assets = {};
+    if (largeImage) activity.assets.large_image = largeImage;
+    if (largeText) activity.assets.large_text = largeText;
+    if (smallImage) activity.assets.small_image = smallImage;
+    if (smallText) activity.assets.small_text = smallText;
+  }
+
+  activity.timestamps = {
+    start: Date.now()
+  };
+
+  try {
+    client.user.setPresence({
+      activities: [activity],
+      status: botState.status || 'online',
+      afk: false
+    });
+  } catch (e) {
+    console.warn('[BOT] client.user.setPresence notice:', e.message);
+  }
+
+  if (client.ws) {
+    try {
+      client.ws.broadcast({
+        op: 3,
+        d: {
+          since: 0,
+          activities: [activity],
+          status: botState.status || 'online',
+          afk: false
+        }
+      });
+    } catch (e) {}
+  }
 }
 
 // Create silent audio resource for VC keepalive
@@ -270,7 +521,7 @@ io.on('connection', (socket) => {
   socket.on('set_custom_status', async (data) => {
     if (!discordClient || !discordClient.user) return;
     try {
-      if (data.type === 'NONE' || !data.text || data.text.trim() === '') {
+      if (data.type === 'NONE' || (!data.text && !data.name)) {
         try {
           await discordClient.user.setActivity(null);
         } catch (e) {}
@@ -285,17 +536,80 @@ io.on('connection', (socket) => {
             }
           });
         }
+        botState.customActivity = null;
+        saveSession(reconnectToken, botState.currentVC, botState.streamConfig, null);
         io.emit('status_updated', { text: '', type: 'NONE' });
+        io.emit('state_update', botState);
         console.log('[BOT] Custom activity cleared');
         return;
       }
 
-      await discordClient.user.setActivity(data.text, {
-        type: data.type || 'PLAYING'
-      });
-      io.emit('status_updated', data);
-      console.log(`[BOT] Custom activity set: ${data.type} ${data.text}`);
+      const activityName = (data.text || data.name || '^ ANE WALA STAR !!').trim();
+      const activityType = data.type || 'STREAMING';
+      const streamUrl = data.streamUrl || data.url || 'https://twitch.tv/discord';
+      const photoInput = data.largeImage || data.photo || data.imageUrl || '';
+      const details = data.details || 'Screen Share (Go-Live)';
+      const state = data.state || '';
+
+      botState.streamConfig = {
+        title: activityName,
+        photo: photoInput,
+        streamUrl: streamUrl,
+        details: details,
+        state: state
+      };
+      botState.customActivity = {
+        text: activityName,
+        name: activityName,
+        type: activityType,
+        streamUrl: streamUrl,
+        details: details,
+        state: state,
+        photo: photoInput,
+        largeImage: photoInput
+      };
+      saveSession(reconnectToken, botState.currentVC, botState.streamConfig, botState.customActivity);
+
+      if (activityType === 'STREAMING') {
+        const resolvedImage = await resolveRichPresenceImage(discordClient, photoInput);
+        await applyStreamingPresence(discordClient, {
+          name: activityName,
+          details: details,
+          state: state,
+          url: streamUrl,
+          largeImage: resolvedImage,
+          largeText: data.largeText || activityName
+        });
+      } else {
+        const resolvedImage = photoInput ? await resolveRichPresenceImage(discordClient, photoInput) : null;
+        const activityPayload = {
+          name: activityName,
+          type: activityType
+        };
+        if (details) activityPayload.details = details;
+        if (state) activityPayload.state = state;
+        if (resolvedImage) {
+          activityPayload.assets = {
+            large_image: resolvedImage,
+            large_text: data.largeText || activityName
+          };
+        }
+        try {
+          await discordClient.user.setPresence({
+            activities: [activityPayload],
+            status: botState.status || 'online',
+            afk: botState.status === 'idle'
+          });
+        } catch (e) {
+          await discordClient.user.setActivity(activityName, { type: activityType });
+        }
+      }
+
+      io.emit('status_updated', botState.customActivity);
+      io.emit('state_update', botState);
+      console.log(`[BOT] Custom activity set: ${activityType} "${activityName}" (Photo: ${photoInput ? 'Yes' : 'No'})`);
     } catch (err) {
+      console.error('[BOT] Failed to set custom status:', err);
       socket.emit('bot_error', 'Failed to set custom status: ' + err.message);
     }
   });
@@ -318,7 +632,10 @@ io.on('connection', (socket) => {
           }
         });
       }
+      botState.customActivity = null;
+      saveSession(reconnectToken, botState.currentVC, botState.streamConfig, null);
       io.emit('status_updated', { text: '', type: 'NONE' });
+      io.emit('state_update', botState);
       console.log('[BOT] Custom activity cleared');
     } catch (err) {
       socket.emit('bot_error', 'Failed to clear custom status: ' + err.message);
@@ -508,7 +825,7 @@ io.on('connection', (socket) => {
   });
 
   // ========== START SCREEN SHARE ==========
-  socket.on('start_stream', async () => {
+  socket.on('start_stream', async (customStreamData) => {
     if (!botState.currentVC) {
       return socket.emit('bot_error', 'You must be in a voice channel to stream');
     }
@@ -526,19 +843,32 @@ io.on('connection', (socket) => {
           }
         });
 
-        // Set rich presence streaming
-        try {
-          await discordClient.user.setActivity('Screen Share (Go-Live)', {
-            type: 'STREAMING',
-            url: 'https://twitch.tv/discord'
-          });
-        } catch (e) {}
+        // Use custom stream config if set, otherwise fallback
+        const cfg = customStreamData || botState.streamConfig || {};
+        const streamTitle = cfg.title || cfg.text || (botState.customActivity?.text) || '^ ANE WALA STAR !!';
+        const streamPhoto = cfg.photo || cfg.largeImage || (botState.customActivity?.photo) || '/stream.jpg';
+        const streamUrl = cfg.streamUrl || cfg.url || 'https://twitch.tv/discord';
+        const streamDetails = cfg.details || 'Screen Share (Go-Live)';
+        const streamState = cfg.state || (botState.currentVC ? botState.currentVC.channelName : '');
+
+        // Resolve photo asset into Discord Gateway format
+        const resolvedImage = await resolveRichPresenceImage(discordClient, streamPhoto);
+
+        // Apply rich streaming presence with custom title and photo
+        await applyStreamingPresence(discordClient, {
+          name: streamTitle,
+          details: streamDetails,
+          state: streamState,
+          url: streamUrl,
+          largeImage: resolvedImage,
+          largeText: streamTitle
+        });
 
         botState.isStreaming = true;
         isStreaming = true;
         io.emit('state_update', botState);
         io.emit('stream_started');
-        console.log('[BOT] Screen share / Go-Live broadcast sent');
+        console.log(`[BOT] Screen share / Go-Live started with custom title: "${streamTitle}" and photo: ${streamPhoto ? 'Yes' : 'No'}`);
       }
     } catch (err) {
       console.error('[BOT] Stream error:', err);
@@ -551,7 +881,14 @@ io.on('connection', (socket) => {
     stopStream();
     try {
       if (discordClient?.user) {
-        await discordClient.user.setActivity(null);
+        // If there was an active non-streaming custom activity, restore it; otherwise clear
+        if (botState.customActivity && botState.customActivity.type && botState.customActivity.type !== 'NONE' && botState.customActivity.type !== 'STREAMING') {
+          await discordClient.user.setActivity(botState.customActivity.text, {
+            type: botState.customActivity.type
+          });
+        } else {
+          await discordClient.user.setActivity(null);
+        }
       }
     } catch (e) {}
     io.emit('state_update', botState);
@@ -800,6 +1137,30 @@ function setupClientEvents(token, targetVC = null) {
           console.warn('[BOT] Auto-join VC error:', e.message);
         }
       }, 1500);
+    }
+
+    // Auto-apply saved custom activity / streaming status if present
+    if (botState.customActivity && botState.customActivity.type && botState.customActivity.type !== 'NONE') {
+      setTimeout(async () => {
+        try {
+          const act = botState.customActivity;
+          if (act.type === 'STREAMING') {
+            const resolvedImg = await resolveRichPresenceImage(discordClient, act.photo || act.largeImage);
+            await applyStreamingPresence(discordClient, {
+              name: act.name || act.text || '^ ANE WALA STAR !!',
+              details: act.details,
+              state: act.state,
+              url: act.streamUrl || 'https://twitch.tv/discord',
+              largeImage: resolvedImg,
+              largeText: act.largeText || act.name
+            });
+          } else {
+            await discordClient.user.setActivity(act.text || act.name, { type: act.type });
+          }
+        } catch (e) {
+          console.warn('[BOT] Auto-apply saved activity notice:', e.message);
+        }
+      }, 1000);
     }
 
     io.emit('login_success', botState);

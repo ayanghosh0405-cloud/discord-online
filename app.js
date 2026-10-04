@@ -35,6 +35,25 @@ const statusButtons = document.querySelectorAll('.status-btn');
 const activityType = document.getElementById('activity-type');
 const activityText = document.getElementById('activity-text');
 const setActivityBtn = document.getElementById('set-activity-btn');
+const clearActivityBtn = document.getElementById('clear-activity-btn');
+const streamingOptions = document.getElementById('streaming-options');
+const activityStreamUrl = document.getElementById('activity-stream-url');
+const activityDetails = document.getElementById('activity-details');
+const activityState = document.getElementById('activity-state');
+const activityImageUrl = document.getElementById('activity-image-url');
+const activityPhotoFileInput = document.getElementById('activity-photo-file-input');
+const btnUploadPhoto = document.getElementById('btn-upload-photo');
+const btnUseStreamJpg = document.getElementById('btn-use-stream-jpg');
+const uploadStatus = document.getElementById('upload-status');
+const activityLiveBadge = document.getElementById('activity-live-badge');
+
+// Discord Card Preview Elements
+const previewActivityImg = document.getElementById('preview-activity-img');
+const previewImagePlaceholder = document.getElementById('preview-image-placeholder');
+const previewActivityName = document.getElementById('preview-activity-name');
+const previewActivityDetails = document.getElementById('preview-activity-details');
+const previewActivityState = document.getElementById('preview-activity-state');
+const previewActivityTimer = document.getElementById('preview-activity-timer');
 
 // Servers & Channels
 const guildSelector = document.getElementById('guild-selector');
@@ -268,41 +287,213 @@ statusButtons.forEach(btn => {
   });
 });
 
-// ===== Custom Activity =====
-const clearActivityBtn = document.getElementById('clear-activity-btn');
+// ===== Custom Activity & Streaming Presence =====
+let streamTimerInterval = null;
+let streamTimerSeconds = 0;
 
-setActivityBtn.addEventListener('click', () => {
-  const type = activityType.value;
-  const text = activityText.value.trim();
-  if (type === 'NONE') {
-    socket.emit('clear_custom_status');
-    activityText.value = '';
-    showToast('Activity cleared!', 'info');
-    return;
-  }
-  if (!text) {
-    return showToast('Please enter activity text', 'error');
-  }
-  socket.emit('set_custom_status', { text, type });
-  showToast('Activity updated!', 'success');
-});
+function updateDiscordPreview() {
+  const type = activityType ? activityType.value : 'STREAMING';
+  const name = (activityText && activityText.value.trim()) || '^ ANE WALA STAR !!';
+  const details = (activityDetails && activityDetails.value.trim()) || 'Screen Share (Go-Live)';
+  const state = (activityState && activityState.value.trim()) || '';
+  const photo = (activityImageUrl && activityImageUrl.value.trim()) || '';
 
+  if (previewActivityName) previewActivityName.textContent = name;
+  if (previewActivityDetails) previewActivityDetails.textContent = details;
+
+  if (previewActivityState) {
+    if (state) {
+      previewActivityState.textContent = state;
+      previewActivityState.style.display = 'block';
+    } else {
+      previewActivityState.style.display = 'none';
+    }
+  }
+
+  // Photo preview
+  if (previewActivityImg && previewImagePlaceholder) {
+    if (photo) {
+      previewActivityImg.src = photo;
+      previewActivityImg.style.display = 'block';
+      previewImagePlaceholder.style.display = 'none';
+    } else {
+      previewActivityImg.src = '/assets/stream.jpg';
+      previewActivityImg.style.display = 'block';
+      previewImagePlaceholder.style.display = 'none';
+    }
+  }
+
+  // Update card header text
+  const cardHeader = document.querySelector('.discord-activity-header');
+  if (cardHeader) {
+    cardHeader.textContent = type === 'STREAMING' ? 'STREAMING' : (type === 'PLAYING' ? 'PLAYING A GAME' : type);
+  }
+}
+
+function startPreviewTimer() {
+  if (streamTimerInterval) clearInterval(streamTimerInterval);
+  streamTimerSeconds = 0;
+  streamTimerInterval = setInterval(() => {
+    streamTimerSeconds++;
+    const mins = Math.floor(streamTimerSeconds / 60).toString().padStart(2, '0');
+    const secs = (streamTimerSeconds % 60).toString().padStart(2, '0');
+    if (previewActivityTimer) {
+      previewActivityTimer.textContent = `${mins}:${secs} elapsed`;
+    }
+  }, 1000);
+}
+
+// Live typing sync to preview card
+if (activityText) activityText.addEventListener('input', updateDiscordPreview);
+if (activityDetails) activityDetails.addEventListener('input', updateDiscordPreview);
+if (activityState) activityState.addEventListener('input', updateDiscordPreview);
+if (activityImageUrl) activityImageUrl.addEventListener('input', updateDiscordPreview);
+
+// Photo Upload Handler (Upload file from device directly to server & Discord)
+if (btnUploadPhoto && activityPhotoFileInput) {
+  btnUploadPhoto.addEventListener('click', () => {
+    activityPhotoFileInput.click();
+  });
+
+  activityPhotoFileInput.addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      showToast('Please select a valid image file (JPG, PNG, GIF, WebP)', 'error');
+      return;
+    }
+
+    if (uploadStatus) {
+      uploadStatus.textContent = '⏳ Uploading photo...';
+      uploadStatus.className = 'upload-status-text';
+    }
+
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const base64 = ev.target.result;
+      if (previewActivityImg) {
+        previewActivityImg.src = base64;
+        previewActivityImg.style.display = 'block';
+        if (previewImagePlaceholder) previewImagePlaceholder.style.display = 'none';
+      }
+
+      try {
+        const response = await fetch('/api/upload-stream-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image: base64,
+            filename: file.name
+          })
+        });
+        const result = await response.json();
+        if (result.success && result.url) {
+          if (activityImageUrl) activityImageUrl.value = result.url;
+          if (uploadStatus) {
+            uploadStatus.textContent = result.isDiscordCdn 
+              ? '✅ Uploaded to Discord CDN! Ready for stream.'
+              : '✅ Photo saved successfully! Ready for stream.';
+            uploadStatus.className = 'upload-status-text success';
+          }
+          showToast('Photo uploaded successfully!', 'success');
+          updateDiscordPreview();
+        } else {
+          throw new Error(result.error || 'Upload failed');
+        }
+      } catch (err) {
+        console.error('Upload error:', err);
+        if (uploadStatus) {
+          uploadStatus.textContent = '⚠️ Upload failed, using local preview';
+          uploadStatus.className = 'upload-status-text error';
+        }
+        showToast('Image upload notice: using local preview', 'info');
+      }
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// Preset button: Use stream.jpg
+if (btnUseStreamJpg) {
+  btnUseStreamJpg.addEventListener('click', () => {
+    if (activityImageUrl) activityImageUrl.value = '/stream.jpg';
+    if (uploadStatus) {
+      uploadStatus.textContent = '✅ Selected default stream.jpg';
+      uploadStatus.className = 'upload-status-text success';
+    }
+    updateDiscordPreview();
+    showToast('Selected default stream.jpg!', 'info');
+  });
+}
+
+// Initial preview setup
+setTimeout(updateDiscordPreview, 100);
+
+// Set Activity Button Handler
+if (setActivityBtn) {
+  setActivityBtn.addEventListener('click', () => {
+    const type = activityType ? activityType.value : 'STREAMING';
+    const text = activityText ? activityText.value.trim() : '';
+
+    if (type === 'NONE') {
+      socket.emit('clear_custom_status');
+      if (activityText) activityText.value = '';
+      if (activityLiveBadge) activityLiveBadge.style.display = 'none';
+      showToast('Activity cleared!', 'info');
+      return;
+    }
+
+    if (!text) {
+      return showToast('Please enter an activity name / title', 'error');
+    }
+
+    const payload = {
+      text: text,
+      name: text,
+      type: type,
+      streamUrl: (activityStreamUrl && activityStreamUrl.value.trim()) || 'https://twitch.tv/discord',
+      details: (activityDetails && activityDetails.value.trim()) || 'Screen Share (Go-Live)',
+      state: (activityState && activityState.value.trim()) || '',
+      photo: (activityImageUrl && activityImageUrl.value.trim()) || '',
+      largeImage: (activityImageUrl && activityImageUrl.value.trim()) || ''
+    };
+
+    socket.emit('set_custom_status', payload);
+    if (activityLiveBadge) activityLiveBadge.style.display = 'inline-flex';
+    startPreviewTimer();
+    showToast(type === 'STREAMING' ? '🟣 Streaming activity set with custom photo & purple play badge!' : 'Activity updated!', 'success');
+  });
+}
+
+// Clear Activity Button Handler
 if (clearActivityBtn) {
   clearActivityBtn.addEventListener('click', () => {
     socket.emit('clear_custom_status');
-    activityText.value = '';
-    activityType.value = 'NONE';
+    if (activityText) activityText.value = '';
+    if (activityType) activityType.value = 'NONE';
+    if (activityLiveBadge) activityLiveBadge.style.display = 'none';
+    if (streamingOptions) streamingOptions.style.display = 'none';
+    if (streamTimerInterval) clearInterval(streamTimerInterval);
+    if (previewActivityTimer) previewActivityTimer.textContent = '00:00 elapsed';
     showToast('Activity turned off!', 'info');
   });
 }
 
+// Activity Type Dropdown Change
 if (activityType) {
   activityType.addEventListener('change', () => {
-    if (activityType.value === 'NONE') {
+    const val = activityType.value;
+    if (val === 'NONE') {
       socket.emit('clear_custom_status');
-      activityText.value = '';
+      if (activityText) activityText.value = '';
+      if (activityLiveBadge) activityLiveBadge.style.display = 'none';
       showToast('Activity cleared', 'info');
     }
+    if (streamingOptions) {
+      streamingOptions.style.display = val === 'NONE' ? 'none' : 'flex';
+    }
+    updateDiscordPreview();
   });
 }
 
@@ -331,7 +522,15 @@ btnStream.addEventListener('click', () => {
   if (currentState.isStreaming) {
     socket.emit('stop_stream');
   } else {
-    socket.emit('start_stream');
+    const streamConfig = {
+      title: (activityText && activityText.value.trim()) || '^ ANE WALA STAR !!',
+      photo: (activityImageUrl && activityImageUrl.value.trim()) || '/stream.jpg',
+      details: (activityDetails && activityDetails.value.trim()) || 'Screen Share (Go-Live)',
+      state: (activityState && activityState.value.trim()) || (currentState.currentVC ? currentState.currentVC.channelName : ''),
+      streamUrl: (activityStreamUrl && activityStreamUrl.value.trim()) || 'https://twitch.tv/discord'
+    };
+    socket.emit('start_stream', streamConfig);
+    showToast('Starting Screen Share with custom title & photo...', 'info');
   }
 });
 
@@ -672,9 +871,46 @@ function updateUI(state) {
   if (streamPreview) {
     if (state.isStreaming) {
       streamPreview.classList.remove('hidden');
+      const streamImg = streamPreview.querySelector('img');
+      if (streamImg) {
+        const photo = (activityImageUrl && activityImageUrl.value) || state.streamConfig?.photo || '/stream.jpg';
+        streamImg.src = photo;
+      }
     } else {
       streamPreview.classList.add('hidden');
     }
+  }
+
+  // Custom activity & Stream config sync
+  if (state.streamConfig) {
+    if (activityText && (!activityText.value || activityText.value === '^ ANE WALA STAR !!')) {
+      if (state.streamConfig.title) activityText.value = state.streamConfig.title;
+    }
+    if (activityImageUrl && !activityImageUrl.value) {
+      if (state.streamConfig.photo) activityImageUrl.value = state.streamConfig.photo;
+    }
+    if (activityDetails && (!activityDetails.value || activityDetails.value === 'Screen Share (Go-Live)')) {
+      if (state.streamConfig.details) activityDetails.value = state.streamConfig.details;
+    }
+    if (activityStreamUrl && (!activityStreamUrl.value || activityStreamUrl.value === 'https://twitch.tv/discord')) {
+      if (state.streamConfig.streamUrl) activityStreamUrl.value = state.streamConfig.streamUrl;
+    }
+    updateDiscordPreview();
+  }
+
+  if (state.customActivity && state.customActivity.type && state.customActivity.type !== 'NONE') {
+    if (activityLiveBadge) activityLiveBadge.style.display = 'inline-flex';
+    if (activityType) activityType.value = state.customActivity.type;
+    if (state.customActivity.name || state.customActivity.text) {
+      activityText.value = state.customActivity.name || state.customActivity.text;
+    }
+    if (state.customActivity.photo && activityImageUrl) {
+      activityImageUrl.value = state.customActivity.photo;
+    }
+    updateDiscordPreview();
+    startPreviewTimer();
+  } else if (state.customActivity && state.customActivity.type === 'NONE') {
+    if (activityLiveBadge) activityLiveBadge.style.display = 'none';
   }
 
   // Populate server lists
