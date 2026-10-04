@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Discord Controller • Remote Dashboard</title>
+  <meta name="description" content="Control your Discord account remotely - Voice, Screen Share, Messaging, and more">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎮</text></svg>">
+</head>
+<body>
+  <!-- Particle Background -->
+  <canvas id="particles-bg"></canvas>
+
+  <!-- Login Screen -->
+  <div id="login-screen" class="screen active">
+    <div class="login-bg-orbs">
+      <div class="orb orb-1"></div>
+      <div class="orb orb-2"></div>
+      <div class="orb orb-3"></div>
+    </div>
+    <div class="login-container">
+      <div class="login-logo">
+        <div class="logo-icon">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03z"/>
+          </svg>
+        </div>
+        <h1>Discord Controller</h1>
+        <p class="login-subtitle">Remote Control Dashboard v2.0</p>
+      </div>
+      <div class="login-form">
+        <div class="input-group">
+          <label for="token-input">Discord Token</label>
+          <div class="input-wrapper">
+            <input type="password" id="token-input" placeholder="Enter your Discord token..." autocomplete="off">
+            <button id="toggle-token" class="toggle-btn" title="Show/Hide token">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
+            </button>
+          </div>
+          <label class="remember-token">
+            <input type="checkbox" id="remember-token"> <span>Remember token</span>
+          </label>
+        </div>
+        <button id="login-btn" class="btn btn-primary btn-lg">
+          <span class="btn-text">Connect to Discord</span>
+          <span class="btn-loader" style="display:none;">
+            <div class="spinner"></div>
+            <span>Connecting...</span>
+          </span>
+        </button>
+        <p id="login-error" class="error-text"></p>
+      </div>
+      <div class="login-features">
+        <div class="feature"><span class="feature-icon">🟢</span> 24/7 Online</div>
+        <div class="feature"><span class="feature-icon">🎤</span> Voice Control</div>
+        <div class="feature"><span class="feature-icon">📺</span> Screen Share</div>
+        <div class="feature"><span class="feature-icon">💬</span> Messaging</div>
+        <div class="feature"><span class="feature-icon">👥</span> Friends & DM</div>
+        <div class="feature"><span class="feature-icon">⚡</span> Low Resources</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dashboard Screen -->
+  <div id="dashboard-screen" class="screen">
+    <!-- Sidebar -->
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <div class="user-info">
+          <div class="user-avatar-wrapper">
+            <img id="user-avatar" src="" alt="Avatar" class="user-avatar">
+            <div id="status-dot" class="status-dot online"></div>
+          </div>
+          <div class="user-details">
+            <span id="user-name" class="user-name">Username</span>
+            <span id="user-tag" class="user-tag">#0000</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Navigation -->
+      <nav class="sidebar-nav">
+        <button class="nav-btn active" data-panel="dashboard-home">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+            <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+          </svg>
+          <span>Dashboard</span>
+        </button>
+        <button class="nav-btn" data-panel="voice-panel-page">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          </svg>
+          <span>Voice & Stream</span>
+        </button>
+        <button class="nav-btn" data-panel="servers-panel-page">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="2" y1="12" x2="22" y2="12"/>
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+          </svg>
+          <span>Servers</span>
+        </button>
+        <button class="nav-btn" data-panel="messages-panel-page">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          <span>Messages</span>
+        </button>
+        <button class="nav-btn" data-panel="settings-panel-page">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+          <span>Settings</span>
+        </button>
+      </nav>
+
+      <!-- Quick VC Status -->
+      <div id="vc-quick-status" class="vc-quick-status hidden">
+        <div class="vc-quick-info">
+          <div class="vc-quick-pulse"></div>
+          <div>
+            <span id="vc-quick-name" class="vc-quick-name">Channel</span>
+            <span id="vc-quick-guild" class="vc-quick-guild">Server</span>
+          </div>
+        </div>
+        <div class="vc-quick-controls">
+          <button id="quick-mute" class="vc-quick-btn" title="Toggle Mute">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            </svg>
+          </button>
+          <button id="quick-deafen" class="vc-quick-btn" title="Toggle Deafen">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 18v-6a9 9 0 0 1 18 0v6"/>
+              <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>
+            </svg>
+          </button>
+          <button id="quick-leave" class="vc-quick-btn danger" title="Leave VC">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"/>
+              <line x1="23" y1="1" x2="1" y2="23"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="uptime-display">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+          </svg>
+          <span id="uptime-text">0s</span>
+        </div>
+        <button id="logout-btn" class="btn btn-danger btn-sm">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+            <polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+          </svg>
+          Logout
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Top Bar -->
+      <header class="top-bar">
+        <button id="menu-toggle" class="menu-toggle">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="3" y1="12" x2="21" y2="12"/>
+            <line x1="3" y1="6" x2="21" y2="6"/>
+            <line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+        </button>
+        <h2 id="page-title" class="page-title">Dashboard</h2>
+        <div class="top-bar-right">
+          <div id="memory-badge" class="memory-badge" title="RAM Usage">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/>
+            </svg>
+            <span id="memory-text">--MB</span>
+          </div>
+          <div class="connection-status" id="connection-status">
+            <span class="conn-dot"></span>
+            <span class="conn-text">Connected</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- ============ DASHBOARD HOME ============ -->
+      <div id="dashboard-home" class="content-panel active">
+        <div class="stats-grid">
+          <div class="stat-card gradient-1">
+            <div class="stat-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+              </svg>
+            </div>
+            <div class="stat-info">
+              <span class="stat-value" id="stat-uptime">0s</span>
+              <span class="stat-label">Uptime</span>
+            </div>
+          </div>
+          <div class="stat-card gradient-2">
+            <div class="stat-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+              </svg>
+            </div>
+            <div class="stat-info">
+              <span class="stat-value" id="stat-servers">0</span>
+              <span class="stat-label">Servers</span>
+            </div>
+          </div>
+          <div class="stat-card gradient-3">
+            <div class="stat-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="23"/>
+                <line x1="8" y1="23" x2="16" y2="23"/>
+              </svg>
+            </div>
+            <div class="stat-info">
+              <span class="stat-value" id="stat-vc">Not Connected</span>
+              <span class="stat-label">Voice Channel</span>
+            </div>
+          </div>
+          <div class="stat-card gradient-4">
+            <div class="stat-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                <line x1="8" y1="21" x2="16" y2="21"/>
+                <line x1="12" y1="17" x2="12" y2="21"/>
+              </svg>
+            </div>
+            <div class="stat-info">
+              <span class="stat-value" id="stat-stream">Off</span>
+              <span class="stat-label">Screen Share</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Status Control -->
+        <div class="panel">
+          <div class="panel-header">
+            <h3>🟢 Online Status</h3>
+          </div>
+          <div class="panel-body">
+            <div class="status-buttons">
+              <button class="status-btn" data-status="online" title="Online">
+                <span class="status-circle online"></span> Online
+              </button>
+              <button class="status-btn" data-status="idle" title="Idle">
+                <span class="status-circle idle"></span> Idle
+              </button>
+              <button class="status-btn" data-status="dnd" title="Do Not Disturb">
+                <span class="status-circle dnd"></span> DND
+              </button>
+              <button class="status-btn" data-status="invisible" title="Invisible">
+                <span class="status-circle invisible"></span> Invisible
+              </button>
+            </div>
+
+            <div class="custom-status-form">
+              <h4 class="form-label">Custom Activity</h4>
+              <div class="activity-row">
+                <select id="activity-type" class="select-input">
+                  <option value="PLAYING">Playing</option>
+                  <option value="STREAMING">Streaming</option>
+                  <option value="LISTENING">Listening to</option>
+                  <option value="WATCHING">Watching</option>
+                  <option value="COMPETING">Competing in</option>
+                </select>
+                <input type="text" id="activity-text" class="text-input" placeholder="Activity text...">
+                <button id="set-activity-btn" class="btn btn-primary btn-sm">Set</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Server List -->
+        <div class="panel">
+          <div class="panel-header">
+            <h3>🏠 Your Servers</h3>
+            <span id="server-count-badge" class="badge badge-blue">0 servers</span>
+          </div>
+          <div class="panel-body">
+            <div id="server-list" class="server-list">
+              <p class="empty-text">Login to see your servers</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ VOICE & STREAM PAGE ============ -->
+      <div id="voice-panel-page" class="content-panel">
+        <!-- Voice Control Panel -->
+        <div class="panel voice-panel">
+          <div class="panel-header">
+            <h3>🎤 Voice Control</h3>
+            <span id="vc-status-badge" class="badge badge-red">Disconnected</span>
+          </div>
+          <div class="panel-body">
+            <div id="vc-info" class="vc-info">
+              <p class="vc-not-connected">Select a server and join a voice channel</p>
+            </div>
+            <div class="vc-controls">
+              <button id="btn-mute" class="vc-btn" disabled>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                </svg>
+                <span>Mute</span>
+              </button>
+              <button id="btn-deafen" class="vc-btn" disabled>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M3 18v-6a9 9 0 0 1 18 0v6"/>
+                  <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>
+                </svg>
+                <span>Deafen</span>
+              </button>
+              <button id="btn-stream" class="vc-btn stream-btn" disabled>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                  <line x1="8" y1="21" x2="16" y2="21"/>
+                  <line x1="12" y1="17" x2="12" y2="21"/>
+                </svg>
+                <span>Screen Share</span>
+              </button>
+              <button id="btn-leave-vc" class="vc-btn danger-btn" disabled>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"/>
+                  <line x1="23" y1="1" x2="1" y2="23"/>
+                </svg>
+                <span>Leave</span>
+              </button>
+            </div>
+
+            <!-- Stream Preview -->
+            <div id="stream-preview" class="stream-preview hidden">
+              <div class="stream-preview-label">
+                <span class="stream-live-dot"></span> LIVE - Screen Share (Static Image)
+              </div>
+              <img src="/assets/stream.jpg" alt="Stream preview">
+            </div>
+          </div>
+        </div>
+
+        <!-- Channel Browser -->
+        <div class="panel channel-panel">
+          <div class="panel-header">
+            <h3>📡 Channel Browser</h3>
+            <select id="guild-selector" class="select-input">
+              <option value="">Select a server...</option>
+            </select>
+          </div>
+          <div class="panel-body">
+            <div id="voice-channels" class="channel-list">
+              <p class="empty-text">Select a server to browse voice channels</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ SERVERS PAGE ============ -->
+      <div id="servers-panel-page" class="content-panel">
+        <div class="panel">
+          <div class="panel-header">
+            <h3>🏠 All Servers</h3>
+            <input type="text" id="server-search" class="text-input" placeholder="Search servers..." style="max-width:240px;">
+          </div>
+          <div class="panel-body">
+            <div id="servers-grid" class="servers-grid">
+              <p class="empty-text">Login to see your servers</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ MESSAGES PAGE ============ -->
+      <div id="messages-panel-page" class="content-panel">
+        <div class="panel message-panel">
+          <div class="panel-header">
+            <h3>💬 Messaging</h3>
+          </div>
+          <div class="panel-body">
+            <div class="message-form">
+              <div class="msg-selectors">
+                <select id="msg-guild-selector" class="select-input">
+                  <option value="">Select a server...</option>
+                </select>
+                <select id="text-channel-selector" class="select-input">
+                  <option value="">Select a text channel...</option>
+                </select>
+              </div>
+              <div class="message-input-row">
+                <input type="text" id="message-input" class="text-input" placeholder="Type a message...">
+                <button id="send-message-btn" class="btn btn-primary">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                  </svg>
+                  Send
+                </button>
+              </div>
+            </div>
+            <div id="message-list" class="message-list">
+              <p class="empty-text">Select a channel to view messages</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ SETTINGS PAGE ============ -->
+      <div id="settings-panel-page" class="content-panel">
+        <div class="panel">
+          <div class="panel-header">
+            <h3>⚙️ Account Settings</h3>
+          </div>
+          <div class="panel-body">
+            <div class="settings-section">
+              <h4 class="form-label">Change Avatar</h4>
+              <div class="settings-row">
+                <input type="url" id="avatar-url-input" class="text-input" placeholder="Paste image URL...">
+                <button id="change-avatar-btn" class="btn btn-primary btn-sm">Change Avatar</button>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h4 class="form-label">System Information</h4>
+              <div class="system-info-grid">
+                <div class="sys-info-item">
+                  <span class="sys-label">Status</span>
+                  <span id="sys-status" class="sys-value">--</span>
+                </div>
+                <div class="sys-info-item">
+                  <span class="sys-label">RAM Usage</span>
+                  <span id="sys-ram" class="sys-value">--</span>
+                </div>
+                <div class="sys-info-item">
+                  <span class="sys-label">Server Uptime</span>
+                  <span id="sys-uptime" class="sys-value">--</span>
+                </div>
+                <div class="sys-info-item">
+                  <span class="sys-label">Bot Uptime</span>
+                  <span id="sys-bot-uptime" class="sys-value">--</span>
+                </div>
+                <div class="sys-info-item">
+                  <span class="sys-label">Guilds</span>
+                  <span id="sys-guilds" class="sys-value">--</span>
+                </div>
+                <div class="sys-info-item">
+                  <span class="sys-label">User ID</span>
+                  <span id="sys-userid" class="sys-value">--</span>
+                </div>
+              </div>
+              <button id="refresh-stats-btn" class="btn btn-sm" style="margin-top:12px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                </svg>
+                Refresh Stats
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Reconnect Info -->
+        <div class="panel">
+          <div class="panel-header">
+            <h3>🔄 Auto-Reconnect</h3>
+            <span class="badge badge-green">Active</span>
+          </div>
+          <div class="panel-body">
+            <p class="info-text">
+              Auto-reconnect is enabled. If the connection drops, the controller will automatically
+              attempt to reconnect up to 10 times with exponential backoff (max 30s delay).
+            </p>
+            <div id="reconnect-status" class="reconnect-status hidden">
+              <div class="spinner-sm"></div>
+              <span>Reconnecting...</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- Toast Notifications -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Reconnect Overlay -->
+  <div id="reconnect-overlay" class="reconnect-overlay hidden">
+    <div class="reconnect-box">
+      <div class="spinner"></div>
+      <h3>Reconnecting...</h3>
+      <p id="reconnect-info">Attempting to reconnect to Discord</p>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

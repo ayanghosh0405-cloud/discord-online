@@ -24,9 +24,24 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 
-// Serve static files
+// Serve static files (supports both root directory and public/assets folders)
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(__dirname));
 app.use('/assets', express.static(path.join(__dirname, 'assets')));
+app.use('/assets', express.static(__dirname));
+
+// Explicit route for homepage
+app.get('/', (req, res) => {
+  const publicIndex = path.join(__dirname, 'public', 'index.html');
+  const rootIndex = path.join(__dirname, 'index.html');
+  if (fs.existsSync(publicIndex)) {
+    return res.sendFile(publicIndex);
+  }
+  if (fs.existsSync(rootIndex)) {
+    return res.sendFile(rootIndex);
+  }
+  res.status(404).send('index.html not found');
+});
 
 // State management
 let discordClient = null;
