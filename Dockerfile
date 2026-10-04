@@ -1,0 +1,30 @@
+FROM node:20-alpine
+
+# Set working directory
+WORKDIR /app
+
+# Install curl for health check
+RUN apk add --no-cache curl
+
+# Copy dependency manifests
+COPY package*.json ./
+
+# Install production dependencies
+RUN npm ci --only=production
+
+# Copy application files
+COPY . .
+
+# Set environment
+ENV NODE_ENV=production
+ENV PORT=3000
+
+# Expose port
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -f http://localhost:3000/ping || exit 1
+
+# Start server
+CMD ["node", "server.js"]

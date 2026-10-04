@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  discord-controller:
+    build: .
+    container_name: discord-controller
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      # - DISCORD_TOKEN=your_token_here
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+    volumes:
+      - session-data:/app/.session.json
+
+volumes:
+  session-data:
