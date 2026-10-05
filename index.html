@@ -82,7 +82,7 @@
         <div class="user-info">
           <div class="user-avatar-wrapper">
             <img id="user-avatar" src="" alt="Avatar" class="user-avatar">
-            <div id="status-dot" class="status-dot online"></div>
+            <div id="status-dot" class="status-dot dnd"></div>
           </div>
           <div class="user-details">
             <span id="user-name" class="user-name">Username</span>
@@ -284,10 +284,43 @@
           </div>
         </div>
 
+        <!-- 24/7 Anti-Sleep Keep-Alive Panel -->
+        <div class="panel keepalive-panel">
+          <div class="panel-header">
+            <div class="keepalive-title-group">
+              <span class="keepalive-icon">🛡️</span>
+              <h3>24/7 Anti-Sleep Keep-Alive</h3>
+              <span id="keepalive-status-badge" class="badge badge-green">🟢 Active (Every 7m)</span>
+            </div>
+            <button id="btn-test-ping" class="btn btn-secondary btn-sm" title="Test instant ping">
+              ⚡ Test Ping
+            </button>
+          </div>
+          <div class="panel-body">
+            <p class="keepalive-description">
+              Render এবং ফ্রি ক্লাউড সার্ভিস স্লিপ হওয়া রোধ করতে সার্ভার স্বয়ংক্রিয়ভাবে প্রতি ৭ মিনিট অন্তর ব্যাকগ্রাউন্ডে সেলফ-পিং পাঠাচ্ছে। আপনার অ্যাকাউন্ট ২৪/৭ একটানা সচল থাকবে।
+            </p>
+            <div class="keepalive-url-row">
+              <label class="field-label" for="keepalive-url-input">🌐 Public Ping URL</label>
+              <div class="keepalive-input-box">
+                <input type="text" id="keepalive-url-input" class="text-input" placeholder="Detecting public URL or enter https://your-app.onrender.com..." readonly>
+                <button id="btn-copy-ping-url" class="btn btn-secondary btn-sm" title="Copy /ping URL for UptimeRobot">
+                  📋 Copy Ping URL
+                </button>
+              </div>
+            </div>
+            <div class="keepalive-footer-row">
+              <span id="keepalive-last-ping" class="keepalive-stat">Last Ping: <strong id="keepalive-ping-time">Active now</strong></span>
+              <span class="keepalive-hint">💡 UptimeRobot.com এ এই লিঙ্কটি ৫ মিনিট ইন্টারভালে যুক্ত রাখতে পারেন।</span>
+            </div>
+          </div>
+        </div>
+
         <!-- Status Control -->
         <div class="panel">
           <div class="panel-header">
-            <h3>🟢 Online Status</h3>
+            <h3>⛔ Online Status (Default: DND)</h3>
+            <span class="badge badge-red" id="current-status-badge">⛔ DND Active</span>
           </div>
           <div class="panel-body">
             <div class="status-buttons">
@@ -297,8 +330,8 @@
               <button class="status-btn" data-status="idle" title="Idle">
                 <span class="status-circle idle"></span> Idle
               </button>
-              <button class="status-btn" data-status="dnd" title="Do Not Disturb">
-                <span class="status-circle dnd"></span> DND
+              <button class="status-btn active" data-status="dnd" title="Do Not Disturb (Default 24/7)">
+                <span class="status-circle dnd"></span> DND (Default)
               </button>
               <button class="status-btn" data-status="invisible" title="Invisible">
                 <span class="status-circle invisible"></span> Invisible
@@ -308,7 +341,10 @@
             <div class="custom-status-form">
               <div class="form-header-row">
                 <h4 class="form-label">🎮 Custom Activity & Stream Presence</h4>
-                <span id="activity-live-badge" class="badge badge-purple" style="display:none;">LIVE</span>
+                <div class="activity-badge-group">
+                  <span id="activity-live-badge" class="badge badge-purple" style="display:none;">LIVE STREAMING</span>
+                  <span id="activity-clean-badge" class="badge badge-dnd" style="display:inline-flex;">⛔ DND DEFAULT (NO PLAY BUTTON)</span>
+                </div>
               </div>
 
               <!-- Activity Type & Title Row -->
@@ -316,8 +352,8 @@
                 <div class="activity-field">
                   <label class="field-label" for="activity-type">Activity Type</label>
                   <select id="activity-type" class="select-input">
-                    <option value="NONE">None (Clear Status)</option>
-                    <option value="STREAMING" selected>🟣 Streaming (Go-Live & Purple Play Badge)</option>
+                    <option value="NONE" selected>✨ None (Clean Default - No Play Button)</option>
+                    <option value="STREAMING">🟣 Streaming (Go-Live & Purple Play Badge)</option>
                     <option value="PLAYING">🟢 Playing</option>
                     <option value="LISTENING">🎵 Listening to</option>
                     <option value="WATCHING">📺 Watching</option>
@@ -332,7 +368,7 @@
               </div>
 
               <!-- Rich Stream / Activity Presence Options -->
-              <div id="streaming-options" class="streaming-options">
+              <div id="streaming-options" class="streaming-options" style="display:none;">
                 <div class="activity-grid">
                   <div class="activity-field">
                     <label class="field-label" for="activity-stream-url">
@@ -342,17 +378,17 @@
                   </div>
                   <div class="activity-field">
                     <label class="field-label" for="activity-details">
-                      Details <span class="field-hint">(1st line under title)</span>
+                      Details <span class="field-hint">(Optional subtitle - leave blank for clean title)</span>
                     </label>
-                    <input type="text" id="activity-details" class="text-input" placeholder="e.g. Screen Share (Go-Live)" value="Screen Share (Go-Live)">
+                    <input type="text" id="activity-details" class="text-input" placeholder="Optional details (leave blank)" value="">
                   </div>
                 </div>
 
                 <div class="activity-field">
                   <label class="field-label" for="activity-state">
-                    State <span class="field-hint">(2nd line under title)</span>
+                    State <span class="field-hint">(Optional 2nd line)</span>
                   </label>
-                  <input type="text" id="activity-state" class="text-input" placeholder="e.g. In Voice Channel / Chilling with chat">
+                  <input type="text" id="activity-state" class="text-input" placeholder="Optional state (leave blank)">
                 </div>
 
                 <!-- Photo / Image Configuration -->
@@ -376,7 +412,7 @@
                   </div>
                 </div>
 
-                <!-- Discord Profile Card Live Preview (Exact match of Image 3 with custom photo!) -->
+                <!-- Discord Profile Card Live Preview (Exact match with custom photo) -->
                 <div class="discord-preview-wrap">
                   <div class="discord-preview-header">
                     <span>Discord Profile Card Live Preview</span>
@@ -384,7 +420,7 @@
                       <span class="purple-stream-dot"></span> Streaming
                     </span>
                   </div>
-                  <div class="discord-activity-card">
+                  <div class="discord-activity-card" id="discord-active-preview">
                     <div class="discord-activity-header">STREAMING</div>
                     <div class="discord-activity-body">
                       <div class="discord-activity-image-box">
@@ -395,7 +431,7 @@
                       </div>
                       <div class="discord-activity-text-col">
                         <div id="preview-activity-name" class="discord-activity-title">^ ANE WALA STAR !!</div>
-                        <div id="preview-activity-details" class="discord-activity-sub">Screen Share (Go-Live)</div>
+                        <div id="preview-activity-details" class="discord-activity-sub" style="display:none;"></div>
                         <div id="preview-activity-state" class="discord-activity-sub" style="display:none;"></div>
                         <div id="preview-activity-timer" class="discord-activity-timer">00:00 elapsed</div>
                       </div>
@@ -404,13 +440,32 @@
                 </div>
               </div>
 
+              <!-- Clean Profile Card Preview (When activity is None / cleared) -->
+              <div id="discord-clean-preview" class="discord-clean-card" style="display:flex;">
+                <div class="discord-clean-avatar-wrap">
+                  <img id="clean-preview-avatar" src="https://cdn.discordapp.com/embed/avatars/0.png" alt="Avatar" class="discord-clean-avatar">
+                  <div class="discord-clean-dot" title="Do Not Disturb"></div>
+                </div>
+                <div class="discord-clean-info">
+                  <div class="discord-clean-title" id="clean-preview-username">Ayan1924C</div>
+                  <div class="discord-clean-desc">Clean Default Mode — No play button or stream badge on profile</div>
+                  <div class="discord-clean-tag">⛔ Status: Do Not Disturb (DND Active 24/7)</div>
+                </div>
+              </div>
+
               <!-- Action Buttons -->
               <div class="activity-actions">
                 <button id="set-activity-btn" class="btn btn-primary">
-                  <span>Set Streaming Activity</span>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="5 3 19 12 5 21 5 3"/>
+                  </svg>
+                  <span>Set Streaming Activity (Play Badge)</span>
                 </button>
-                <button id="clear-activity-btn" class="btn btn-danger" title="Clear / Turn off activity">
-                  <span>Clear Activity</span>
+                <button id="clear-activity-btn" class="btn btn-danger" title="Clear / Remove play button">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                  </svg>
+                  <span>Clear Activity (Remove Play Button)</span>
                 </button>
               </div>
             </div>

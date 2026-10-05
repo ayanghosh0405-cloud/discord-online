@@ -112,8 +112,14 @@ let currentStreamConnection = null;
 let isStreaming = false;
 let reconnectToken = DEFAULT_TOKEN;
 let reconnectAttempts = 0;
-const MAX_RECONNECT_ATTEMPTS = 15;
+let isReconnecting = false;
 const SESSION_FILE = path.join(__dirname, '.session.json');
+
+// 24/7 Anti-Sleep Keep-Alive Configuration
+let publicAppUrl = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL || null;
+let selfPingInterval = null;
+let lastSelfPingAt = null;
+let selfPingSuccessCount = 0;
 
 let botState = {
   loggedIn: false,
@@ -121,21 +127,23 @@ let botState = {
   discriminator: '',
   avatar: '',
   userId: '',
-  status: 'online',
+  status: 'dnd', // Default to DND (Do Not Disturb) mode
   guilds: [],
   currentVC: null,
   isMuted: false,
   isDeafened: false,
   isStreaming: false,
   uptime: 0,
+  firstConnectedAt: null,
   friends: [],
   dmChannels: [],
-  customActivity: null,
+  streamStartedAt: Date.now(),
+  customActivity: null, // Default to null (Clean default without play button)
   streamConfig: {
     title: '^ ANE WALA STAR !!',
     photo: '/stream.jpg',
-    streamUrl: 'https://twitch.tv/discord',
-    details: 'Screen Share (Go-Live)',
+    streamUrl: 'https://www.twitch.tv/discord',
+    details: '',
     state: ''
   }
 };
@@ -143,7 +151,63 @@ let botState = {
 let uptimeInterval = null;
 let startTime = null;
 let heartbeatInterval = null;
+let presenceKeepAliveInterval = null;
 let memoryInterval = null;
+let watchdogInterval = null;
+
+// Anti-Sleep self-ping loop (keeps Render/Koyeb awake 24/7)
+function startSelfPing(url) {
+  if (url) {
+    publicAppUrl = url.replace(/\/+$/, '');
+  }
+  if (!publicAppUrl || publicAppUrl.includes('localhost') || publicAppUrl.includes('127.0.0.1')) {
+    return;
+  }
+
+  if (selfPingInterval) clearInterval(selfPingInterval);
+
+  console.log(`[KEEP-ALIVE] 24/7 Anti-Sleep active for: ${publicAppUrl}/ping`);
+
+  const pingFn = () => {
+    try {
+      const pingUrl = `${publicAppUrl}/ping`;
+      const client = pingUrl.startsWith('https:') ? require('https') : require('http');
+      client.get(pingUrl, (res) => {
+        lastSelfPingAt = Date.now();
+        selfPingSuccessCount++;
+        console.log(`[KEEP-ALIVE] Self-ping #${selfPingSuccessCount} OK (${res.statusCode}) - 24/7 Keep-Alive active`);
+        io.emit('keepalive_update', {
+          publicUrl: publicAppUrl,
+          lastPing: lastSelfPingAt,
+          pingCount: selfPingSuccessCount,
+          active: true
+        });
+      }).on('error', (err) => {
+        console.warn('[KEEP-ALIVE] Self-ping notice:', err.message);
+      });
+    } catch (e) {
+      console.warn('[KEEP-ALIVE] Ping error:', e.message);
+    }
+  };
+
+  // Ping every 7 minutes (Render Free spins down after 15m of inactivity)
+  selfPingInterval = setInterval(pingFn, 7 * 60 * 1000);
+  setTimeout(pingFn, 15000);
+}
+
+// 24/7 Watchdog Timer - Detects silent disconnects and revives Discord connection
+function startWatchdog() {
+  if (watchdogInterval) clearInterval(watchdogInterval);
+  watchdogInterval = setInterval(() => {
+    if (reconnectToken && botState.loggedIn && !isReconnecting) {
+      const isDead = !discordClient || !discordClient.ws || discordClient.ws.status !== 0;
+      if (isDead) {
+        console.warn(`[WATCHDOG] Connection dropped (WS Status: ${discordClient?.ws?.status}). Re-establishing 24/7 connection...`);
+        attemptReconnect();
+      }
+    }
+  }, 30000);
+}
 
 // Anti-Ban Discord Client Factory
 function createDiscordClient() {
@@ -177,8 +241,19 @@ function loadSavedSession() {
       if (data && data.streamConfig) {
         botState.streamConfig = { ...botState.streamConfig, ...data.streamConfig };
       }
-      if (data && data.customActivity) {
+      if (data && data.customActivity !== undefined) {
         botState.customActivity = data.customActivity;
+      }
+      if (data && data.status) {
+        botState.status = data.status;
+      } else {
+        botState.status = 'dnd';
+      }
+      if (data && data.publicUrl && !publicAppUrl) {
+        publicAppUrl = data.publicUrl;
+      }
+      if (data && data.firstConnectedAt) {
+        botState.firstConnectedAt = data.firstConnectedAt;
       }
       if (data && data.token) return data;
     }
@@ -188,20 +263,26 @@ function loadSavedSession() {
   return {
     token: DEFAULT_TOKEN,
     savedAt: Date.now(),
+    status: botState.status || 'dnd',
     streamConfig: botState.streamConfig,
-    customActivity: botState.customActivity
+    customActivity: botState.customActivity,
+    publicUrl: publicAppUrl,
+    firstConnectedAt: botState.firstConnectedAt
   };
 }
 
 // Save session
-function saveSession(token, vcData = null, streamConfig = null, customActivity = null) {
+function saveSession(token, vcData = null, streamConfig = null, customActivity = undefined, status = null, publicUrl = null) {
   try {
     const existing = loadSavedSession() || {};
     const data = {
       token: token || reconnectToken || DEFAULT_TOKEN,
+      status: status || botState.status || existing.status || 'dnd',
       lastVC: vcData !== undefined ? vcData : botState.currentVC,
       streamConfig: streamConfig || botState.streamConfig || existing.streamConfig,
-      customActivity: customActivity !== undefined ? customActivity : (botState.customActivity || existing.customActivity),
+      customActivity: customActivity !== undefined ? customActivity : (botState.customActivity !== undefined ? botState.customActivity : existing.customActivity),
+      publicUrl: publicUrl || publicAppUrl || existing.publicUrl || null,
+      firstConnectedAt: botState.firstConnectedAt || existing.firstConnectedAt || Date.now(),
       savedAt: Date.now()
     };
     fs.writeFileSync(SESSION_FILE, JSON.stringify(data, null, 2), 'utf8');
@@ -224,7 +305,7 @@ async function uploadToDiscordCdn(client, bufferOrPath, filename = 'stream.jpg')
   if (!client || !client.user) return null;
   try {
     let targetChannel = null;
-    // 1. Try finding DM channel
+    // 1. Try finding DM channel first (private & safe)
     for (const ch of client.channels.cache.values()) {
       if (ch.type === 'DM' || ch.type === 'GROUP_DM') {
         targetChannel = ch;
@@ -250,7 +331,7 @@ async function uploadToDiscordCdn(client, bufferOrPath, filename = 'stream.jpg')
         files: [{ attachment: bufferOrPath, name: filename }]
       });
       const url = sent.attachments?.first?.()?.url;
-      try { await sent.delete(); } catch(e) {}
+      // Do not delete message so Discord CDN keeps attachment accessible
       if (url) {
         console.log('[BOT] Stream photo uploaded to Discord CDN:', url);
         return url;
@@ -267,6 +348,35 @@ async function resolveRichPresenceImage(client, photoInput, appId = '38322632097
   if (!photoInput || typeof photoInput !== 'string') return null;
   let trimmed = photoInput.trim();
   if (!trimmed) return null;
+
+  // Handle Data URL (base64 image from file upload)
+  if (trimmed.startsWith('data:image/')) {
+    try {
+      const base64Data = trimmed.replace(/^data:image\/\w+;base64,/, '');
+      const buffer = Buffer.from(base64Data, 'base64');
+      const uploadDir = path.join(__dirname, 'public', 'uploads');
+      if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+      const savedName = `stream_${Date.now()}.png`;
+      const filePath = path.join(uploadDir, savedName);
+      fs.writeFileSync(filePath, buffer);
+
+      // Sync stream.jpg
+      try { fs.writeFileSync(path.join(__dirname, 'stream.jpg'), buffer); } catch(e) {}
+      try { fs.writeFileSync(path.join(__dirname, 'public', 'stream.jpg'), buffer); } catch(e) {}
+
+      let cdnUrl = null;
+      if (client && client.user) {
+        cdnUrl = await uploadToDiscordCdn(client, buffer, savedName);
+      }
+      if (cdnUrl) {
+        trimmed = cdnUrl;
+      } else {
+        trimmed = `/uploads/${savedName}`;
+      }
+    } catch (err) {
+      console.warn('[BOT] Base64 image resolve error:', err.message);
+    }
+  }
 
   // Handle local path (/stream.jpg, /uploads/...)
   if (trimmed.startsWith('/') || (!trimmed.startsWith('http') && !trimmed.startsWith('mp:') && fs.existsSync(path.join(__dirname, trimmed)))) {
@@ -342,20 +452,71 @@ async function resolveRichPresenceImage(client, photoInput, appId = '38322632097
   return trimmed;
 }
 
+// Re-assert active presence (keeps streaming badge & photo persistently visible ONLY when active)
+async function reassertActivePresence() {
+  if (!discordClient || !discordClient.user) return;
+  // If activity is cleared or set to NONE, keep profile completely clean (no play button)
+  if (!botState.customActivity || botState.customActivity.type === 'NONE') {
+    return;
+  }
+  try {
+    if (botState.customActivity.type === 'STREAMING') {
+      const act = botState.customActivity;
+      const resolvedImg = await resolveRichPresenceImage(discordClient, act.photo || act.largeImage);
+      await applyStreamingPresence(discordClient, {
+        name: act.name || act.text || '^ ANE WALA STAR !!',
+        details: act.details,
+        state: act.state,
+        url: act.streamUrl || 'https://www.twitch.tv/discord',
+        largeImage: resolvedImg,
+        largeText: act.largeText || act.name
+      });
+    } else if (botState.isStreaming && botState.streamConfig) {
+      const cfg = botState.streamConfig;
+      const resolvedImg = await resolveRichPresenceImage(discordClient, cfg.photo);
+      await applyStreamingPresence(discordClient, {
+        name: cfg.title || '^ ANE WALA STAR !!',
+        details: cfg.details,
+        state: cfg.state,
+        url: cfg.streamUrl || 'https://www.twitch.tv/discord',
+        largeImage: resolvedImg,
+        largeText: cfg.title
+      });
+    }
+  } catch (err) {
+    console.warn('[PRESENCE] Keepalive error:', err.message);
+  }
+}
+
 // Apply streaming Rich Presence with custom title and photo
 async function applyStreamingPresence(client, options) {
   if (!client || !client.user) return;
   const { name, details, state, url, largeImage, largeText, smallImage, smallText } = options;
 
+  let streamUrl = (url || 'https://www.twitch.tv/discord').trim();
+  if (!streamUrl.startsWith('http://') && !streamUrl.startsWith('https://')) {
+    streamUrl = `https://www.twitch.tv/${streamUrl.replace(/^@/, '')}`;
+  }
+  if (streamUrl.startsWith('https://twitch.tv/')) {
+    streamUrl = streamUrl.replace('https://twitch.tv/', 'https://www.twitch.tv/');
+  }
+
   const activity = {
-    name: name || '^ ANE WALA STAR !!',
+    name: (name || '^ ANE WALA STAR !!').trim(),
     type: 1, // STREAMING
-    url: url || 'https://twitch.tv/discord',
-    flags: 1
+    url: streamUrl,
+    flags: 0 // Pure stream flag
   };
 
-  if (details) activity.details = details;
-  if (state) activity.state = state;
+  // Filter out 'Screen Share (Go-Live)' and only add details if user explicitly entered custom text
+  if (details && details.trim() && details.trim() !== 'Screen Share (Go-Live)') {
+    activity.details = details.trim();
+  }
+
+  // Only add state if user explicitly entered text
+  if (state && state.trim()) {
+    activity.state = state.trim();
+  }
 
   if (largeImage || largeText || smallImage || smallText) {
     activity.assets = {};
@@ -365,14 +526,18 @@ async function applyStreamingPresence(client, options) {
     if (smallText) activity.assets.small_text = smallText;
   }
 
+  if (!botState.streamStartedAt) {
+    botState.streamStartedAt = Date.now();
+  }
+
   activity.timestamps = {
-    start: Date.now()
+    start: botState.streamStartedAt
   };
 
   try {
     client.user.setPresence({
       activities: [activity],
-      status: botState.status || 'online',
+      status: botState.status || 'dnd',
       afk: false
     });
   } catch (e) {
@@ -386,7 +551,7 @@ async function applyStreamingPresence(client, options) {
         d: {
           since: 0,
           activities: [activity],
-          status: botState.status || 'online',
+          status: botState.status || 'dnd',
           afk: false
         }
       });
@@ -439,12 +604,61 @@ io.on('connection', (socket) => {
   // Send current state on connect
   socket.emit('state_update', botState);
 
+  // Send 24/7 Anti-Sleep Keep-Alive info on connect
+  socket.emit('keepalive_info', {
+    publicUrl: publicAppUrl,
+    selfPingActive: !!selfPingInterval,
+    lastPing: lastSelfPingAt,
+    pingCount: selfPingSuccessCount
+  });
+
   // Send default / saved session info
   const saved = loadSavedSession();
   socket.emit('saved_session_found', {
     hasSavedSession: true,
     defaultToken: DEFAULT_TOKEN,
     targetUser: TARGET_USER_NAME
+  });
+
+  // ========== REGISTER PUBLIC DASHBOARD URL (FOR 24/7 SELF-PING) ==========
+  socket.on('register_app_url', (url) => {
+    if (url && typeof url === 'string' && !url.includes('localhost') && !url.includes('127.0.0.1')) {
+      const cleanUrl = url.replace(/\/+$/, '');
+      if (publicAppUrl !== cleanUrl) {
+        publicAppUrl = cleanUrl;
+        console.log(`[KEEP-ALIVE] Public dashboard URL registered: ${publicAppUrl}`);
+        saveSession(reconnectToken, botState.currentVC, botState.streamConfig, botState.customActivity, botState.status, publicAppUrl);
+        startSelfPing(publicAppUrl);
+        io.emit('keepalive_info', {
+          publicUrl: publicAppUrl,
+          selfPingActive: !!selfPingInterval,
+          lastPing: lastSelfPingAt,
+          pingCount: selfPingSuccessCount
+        });
+      }
+    }
+  });
+
+  // ========== TEST SELF-PING (INSTANT KEEP-ALIVE CHECK) ==========
+  socket.on('test_self_ping', (cb) => {
+    const testUrl = publicAppUrl || (process.env.RENDER_EXTERNAL_URL ? process.env.RENDER_EXTERNAL_URL.replace(/\/+$/, '') : null);
+    if (!testUrl) {
+      if (typeof cb === 'function') cb({ success: false, error: 'No public URL registered yet' });
+      return;
+    }
+    const pingUrl = `${testUrl}/ping`;
+    const client = pingUrl.startsWith('https:') ? require('https') : require('http');
+    const start = Date.now();
+    client.get(pingUrl, (res) => {
+      const latency = Date.now() - start;
+      lastSelfPingAt = Date.now();
+      selfPingSuccessCount++;
+      if (typeof cb === 'function') {
+        cb({ success: res.statusCode === 200, statusCode: res.statusCode, latency, url: pingUrl });
+      }
+    }).on('error', (err) => {
+      if (typeof cb === 'function') cb({ success: false, error: err.message, url: pingUrl });
+    });
   });
 
   // ========== LOGIN ==========
@@ -489,31 +703,82 @@ io.on('connection', (socket) => {
     if (!discordClient || !discordClient.user) return;
     try {
       botState.status = status;
-      // 1. setStatus
-      try { await discordClient.user.setStatus(status); } catch (e) {}
-      // 2. setPresence
-      try {
-        await discordClient.user.setPresence({
-          status: status,
-          activities: discordClient.user.presence?.activities || []
-        });
-      } catch (e) {}
-      // 3. Direct Discord Gateway Opcode 3
-      if (discordClient.ws) {
-        discordClient.ws.broadcast({
-          op: 3,
-          d: {
-            since: status === 'idle' ? Date.now() : 0,
-            activities: discordClient.user.presence?.activities || [],
+      saveSession(reconnectToken, botState.currentVC, botState.streamConfig, botState.customActivity, status);
+      // Preserve streaming activity during status changes
+      if (botState.customActivity && botState.customActivity.type === 'STREAMING') {
+        await reassertActivePresence();
+      } else {
+        // 1. setStatus
+        try { await discordClient.user.setStatus(status); } catch (e) {}
+        // 2. setPresence
+        try {
+          await discordClient.user.setPresence({
             status: status,
-            afk: status === 'idle'
-          }
-        });
+            activities: (botState.customActivity && botState.customActivity.type !== 'NONE') ? (discordClient.user.presence?.activities || []) : []
+          });
+        } catch (e) {}
+        // 3. Direct Discord Gateway Opcode 3
+        if (discordClient.ws) {
+          discordClient.ws.broadcast({
+            op: 3,
+            d: {
+              since: status === 'idle' ? Date.now() : 0,
+              activities: (botState.customActivity && botState.customActivity.type !== 'NONE') ? (discordClient.user.presence?.activities || []) : [],
+              status: status,
+              afk: status === 'idle'
+            }
+          });
+        }
       }
       io.emit('state_update', botState);
       socket.emit('status_updated', { status });
     } catch (err) {
       socket.emit('bot_error', 'Failed to set status: ' + err.message);
+    }
+  });
+
+  // ========== UPLOAD STREAM PHOTO VIA SOCKET ==========
+  socket.on('upload_stream_photo', async (data) => {
+    try {
+      if (!data || !data.image) {
+        return socket.emit('upload_photo_result', { success: false, error: 'No image provided' });
+      }
+      const base64Data = data.image.replace(/^data:image\/\w+;base64,/, '');
+      const buffer = Buffer.from(base64Data, 'base64');
+      const ext = (data.filename && path.extname(data.filename)) || '.png';
+      const savedName = `stream_${Date.now()}${ext}`;
+      const uploadDir = path.join(__dirname, 'public', 'uploads');
+      if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
+      const filePath = path.join(uploadDir, savedName);
+      fs.writeFileSync(filePath, buffer);
+
+      // Sync to stream.jpg
+      try { fs.writeFileSync(path.join(__dirname, 'stream.jpg'), buffer); } catch(e) {}
+      try { fs.writeFileSync(path.join(__dirname, 'public', 'stream.jpg'), buffer); } catch(e) {}
+
+      let discordCdnUrl = null;
+      if (discordClient && discordClient.user) {
+        discordCdnUrl = await uploadToDiscordCdn(discordClient, buffer, savedName);
+      }
+
+      const localUrl = `/uploads/${savedName}`;
+      const finalUrl = discordCdnUrl || localUrl;
+
+      if (botState.streamConfig) {
+        botState.streamConfig.photo = finalUrl;
+      }
+
+      socket.emit('upload_photo_result', {
+        success: true,
+        url: finalUrl,
+        localUrl: localUrl,
+        isDiscordCdn: !!discordCdnUrl
+      });
+      console.log('[UPLOAD] Stream photo saved via socket:', finalUrl);
+    } catch (err) {
+      console.error('[UPLOAD] Socket image upload error:', err.message);
+      socket.emit('upload_photo_result', { success: false, error: err.message });
     }
   });
 
@@ -525,22 +790,30 @@ io.on('connection', (socket) => {
         try {
           await discordClient.user.setActivity(null);
         } catch (e) {}
+        try {
+          await discordClient.user.setPresence({
+            status: botState.status || 'dnd',
+            activities: [],
+            afk: false
+          });
+        } catch (e) {}
         if (discordClient.ws) {
           discordClient.ws.broadcast({
             op: 3,
             d: {
-              since: botState.status === 'idle' ? Date.now() : 0,
+              since: 0,
               activities: [],
-              status: botState.status,
-              afk: botState.status === 'idle'
+              status: botState.status || 'dnd',
+              afk: false
             }
           });
         }
         botState.customActivity = null;
-        saveSession(reconnectToken, botState.currentVC, botState.streamConfig, null);
+        botState.isStreaming = false;
+        saveSession(reconnectToken, botState.currentVC, botState.streamConfig, null, botState.status);
         io.emit('status_updated', { text: '', type: 'NONE' });
         io.emit('state_update', botState);
-        console.log('[BOT] Custom activity cleared');
+        console.log('[BOT] Custom activity cleared: Clean default state active (no play button)');
         return;
       }
 
@@ -548,8 +821,9 @@ io.on('connection', (socket) => {
       const activityType = data.type || 'STREAMING';
       const streamUrl = data.streamUrl || data.url || 'https://twitch.tv/discord';
       const photoInput = data.largeImage || data.photo || data.imageUrl || '';
-      const details = data.details || 'Screen Share (Go-Live)';
-      const state = data.state || '';
+      // Ensure 'Screen Share (Go-Live)' never appears unless user explicitly provided custom details
+      const details = (data.details && data.details.trim() !== 'Screen Share (Go-Live)') ? data.details.trim() : '';
+      const state = (data.state && data.state.trim()) ? data.state.trim() : '';
 
       botState.streamConfig = {
         title: activityName,
@@ -568,7 +842,7 @@ io.on('connection', (socket) => {
         photo: photoInput,
         largeImage: photoInput
       };
-      saveSession(reconnectToken, botState.currentVC, botState.streamConfig, botState.customActivity);
+      saveSession(reconnectToken, botState.currentVC, botState.streamConfig, botState.customActivity, botState.status);
 
       if (activityType === 'STREAMING') {
         const resolvedImage = await resolveRichPresenceImage(discordClient, photoInput);
@@ -597,7 +871,7 @@ io.on('connection', (socket) => {
         try {
           await discordClient.user.setPresence({
             activities: [activityPayload],
-            status: botState.status || 'online',
+            status: botState.status || 'dnd',
             afk: botState.status === 'idle'
           });
         } catch (e) {
@@ -621,22 +895,31 @@ io.on('connection', (socket) => {
       try {
         await discordClient.user.setActivity(null);
       } catch (e) {}
+      try {
+        await discordClient.user.setPresence({
+          status: botState.status || 'dnd',
+          activities: [],
+          afk: false
+        });
+      } catch (e) {}
       if (discordClient.ws) {
         discordClient.ws.broadcast({
           op: 3,
           d: {
-            since: botState.status === 'idle' ? Date.now() : 0,
+            since: 0,
             activities: [],
-            status: botState.status,
-            afk: botState.status === 'idle'
+            status: botState.status || 'dnd',
+            afk: false
           }
         });
       }
       botState.customActivity = null;
-      saveSession(reconnectToken, botState.currentVC, botState.streamConfig, null);
+      botState.isStreaming = false;
+      saveSession(reconnectToken, botState.currentVC, botState.streamConfig, null, botState.status);
       io.emit('status_updated', { text: '', type: 'NONE' });
       io.emit('state_update', botState);
-      console.log('[BOT] Custom activity cleared');
+      socket.emit('activity_cleared');
+      console.log('[BOT] Custom activity cleared: Play button and stream badge removed, restored to default clean state');
     } catch (err) {
       socket.emit('bot_error', 'Failed to clear custom status: ' + err.message);
     }
@@ -707,6 +990,9 @@ io.on('connection', (socket) => {
             self_deaf: botState.isDeafened
           }
         });
+        if (botState.customActivity && botState.customActivity.type === 'STREAMING') {
+          setTimeout(reassertActivePresence, 500);
+        }
       }
 
       // 3. Setup voice keep-alive connection via @discordjs/voice (in background)
@@ -848,7 +1134,7 @@ io.on('connection', (socket) => {
         const streamTitle = cfg.title || cfg.text || (botState.customActivity?.text) || '^ ANE WALA STAR !!';
         const streamPhoto = cfg.photo || cfg.largeImage || (botState.customActivity?.photo) || '/stream.jpg';
         const streamUrl = cfg.streamUrl || cfg.url || 'https://twitch.tv/discord';
-        const streamDetails = cfg.details || 'Screen Share (Go-Live)';
+        const streamDetails = (cfg.details && cfg.details.trim() !== 'Screen Share (Go-Live)') ? cfg.details.trim() : '';
         const streamState = cfg.state || (botState.currentVC ? botState.currentVC.channelName : '');
 
         // Resolve photo asset into Discord Gateway format
@@ -1031,17 +1317,46 @@ io.on('connection', (socket) => {
 function setupClientEvents(token, targetVC = null) {
   reconnectToken = token;
 
-  discordClient.on('ready', () => {
+  discordClient.on('ready', async () => {
     console.log(`[BOT] Logged in as ${discordClient.user.tag}`);
     reconnectAttempts = 0;
+    isReconnecting = false;
 
-    startTime = Date.now();
+    const saved = loadSavedSession();
+    if (!botState.firstConnectedAt) {
+      botState.firstConnectedAt = saved?.firstConnectedAt || Date.now();
+    }
+    startTime = botState.firstConnectedAt;
+
     botState.loggedIn = true;
     botState.username = discordClient.user.username;
     botState.discriminator = discordClient.user.discriminator;
     botState.avatar = discordClient.user.displayAvatarURL({ size: 256 });
     botState.userId = discordClient.user.id;
-    botState.status = 'online';
+    // Default to DND (Do Not Disturb) status or saved user preference
+    botState.status = saved?.status || 'dnd';
+
+    // Apply DND status to Discord immediately
+    try { await discordClient.user.setStatus(botState.status); } catch (e) {}
+    try {
+      await discordClient.user.setPresence({
+        status: botState.status,
+        activities: []
+      });
+    } catch (e) {}
+    if (discordClient.ws) {
+      try {
+        discordClient.ws.broadcast({
+          op: 3,
+          d: {
+            since: 0,
+            activities: [],
+            status: botState.status,
+            afk: false
+          }
+        });
+      } catch (e) {}
+    }
 
     // Get guilds
     botState.guilds = discordClient.guilds.cache.map(g => ({
@@ -1065,6 +1380,15 @@ function setupClientEvents(token, targetVC = null) {
         console.log(`[HEARTBEAT] ${new Date().toLocaleTimeString()} - Online as ${discordClient.user.tag}`);
       }
     }, 300000); // Every 5 minutes
+
+    // Dedicated Presence Keep-Alive Heartbeat (ensures purple streaming badge & logo never disappear)
+    if (presenceKeepAliveInterval) clearInterval(presenceKeepAliveInterval);
+    presenceKeepAliveInterval = setInterval(reassertActivePresence, 20000);
+
+    discordClient.on('shardResume', () => {
+      console.log('[BOT] Gateway resumed, re-asserting streaming presence...');
+      reassertActivePresence();
+    });
 
     // Voice State Syncer - checks every guild to see if account is in a VC
     function syncVoiceState() {
@@ -1200,33 +1524,53 @@ function setupClientEvents(token, targetVC = null) {
     io.emit('bot_error', err.message);
   });
 
-  discordClient.on('disconnect', () => {
-    console.log('[BOT] Disconnected');
+  discordClient.on('shardDisconnect', (event, shardId) => {
+    console.log(`[BOT] Shard ${shardId} disconnected:`, event?.reason || event || 'Network drop');
     botState.loggedIn = false;
     botState.status = 'offline';
     io.emit('state_update', botState);
-
-    // Auto-reconnect
     attemptReconnect();
   });
 
+  discordClient.on('shardError', (err, shardId) => {
+    console.warn(`[BOT] Shard ${shardId} network warning:`, err?.message || err);
+  });
+
+  discordClient.on('shardResume', (shardId) => {
+    console.log(`[BOT] Shard ${shardId} connection resumed - Keeping 24/7 DND status`);
+    botState.loggedIn = true;
+    const saved = loadSavedSession();
+    botState.status = saved?.status || 'dnd';
+    io.emit('state_update', botState);
+    if (botState.customActivity && botState.customActivity.type && botState.customActivity.type !== 'NONE') {
+      reassertActivePresence();
+    }
+  });
+
+  discordClient.on('shardReconnecting', (shardId) => {
+    console.log(`[BOT] Shard ${shardId} reconnecting to Discord Gateway...`);
+  });
+
   discordClient.on('invalidated', () => {
-    console.log('[BOT] Session invalidated');
+    console.log('[BOT] Gateway session invalidated, reconnecting...');
     attemptReconnect();
   });
 }
 
-async function attemptReconnect() {
-  if (!reconnectToken || reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-    console.log('[BOT] Max reconnect attempts reached or no token');
+async function attemptReconnect(customDelay = null) {
+  if (!reconnectToken) {
+    console.log('[BOT] No token available for auto-reconnect');
     return;
   }
+  if (isReconnecting) return;
+  isReconnecting = true;
 
   reconnectAttempts++;
-  const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000); // Exponential backoff, max 30s
-  console.log(`[BOT] Reconnecting in ${delay / 1000}s (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+  // Exponential backoff capped at 30 seconds: 2s, 3s, 5s, 8s, 12s, 18s, 27s, 30s, 30s...
+  const delay = customDelay || Math.min(2000 * Math.pow(1.35, Math.min(reconnectAttempts, 8)), 30000);
+  console.log(`[BOT] Reconnecting in ${Math.round(delay / 1000)}s (Attempt #${reconnectAttempts} - 24/7 Resilience)`);
 
-  io.emit('bot_reconnecting', { attempt: reconnectAttempts, maxAttempts: MAX_RECONNECT_ATTEMPTS });
+  io.emit('bot_reconnecting', { attempt: reconnectAttempts, maxAttempts: 'Continuous' });
 
   setTimeout(async () => {
     try {
@@ -1234,11 +1578,16 @@ async function attemptReconnect() {
         try { discordClient.destroy(); } catch (e) {}
       }
       discordClient = createDiscordClient();
-      setupClientEvents(reconnectToken);
+      const saved = loadSavedSession();
+      setupClientEvents(reconnectToken, saved?.lastVC);
       await discordClient.login(reconnectToken);
+      isReconnecting = false;
     } catch (err) {
       console.error('[BOT] Reconnect failed:', err.message);
-      attemptReconnect();
+      isReconnecting = false;
+      // If token is invalid, wait 60s before retrying to prevent rate limits
+      const nextDelay = (err.message && err.message.toLowerCase().includes('token')) ? 60000 : null;
+      attemptReconnect(nextDelay);
     }
   }, delay);
 }
@@ -1269,14 +1618,15 @@ function disconnectEverything() {
   }
   if (uptimeInterval) clearInterval(uptimeInterval);
   if (heartbeatInterval) clearInterval(heartbeatInterval);
+  if (presenceKeepAliveInterval) clearInterval(presenceKeepAliveInterval);
   currentStreamConnection = null;
   isStreaming = false;
 
   botState = {
     loggedIn: false, username: '', discriminator: '', avatar: '',
-    userId: '', status: 'offline', guilds: [], currentVC: null,
+    userId: '', status: 'dnd', guilds: [], currentVC: null,
     isMuted: false, isDeafened: false, isStreaming: false, uptime: 0,
-    friends: [], dmChannels: []
+    firstConnectedAt: null, friends: [], dmChannels: [], customActivity: null
   };
 }
 
@@ -1287,11 +1637,27 @@ app.get('/ping', (req, res) => {
   res.send('pong');
 });
 
+app.get('/api/keepalive', (req, res) => {
+  res.json({
+    status: 'ok',
+    publicUrl: publicAppUrl || null,
+    selfPingActive: !!selfPingInterval,
+    lastPingAt: lastSelfPingAt,
+    pingCount: selfPingSuccessCount,
+    botStatus: botState.status,
+    loggedIn: botState.loggedIn,
+    uptime: botState.uptime
+  });
+});
+
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     uptime: botState.uptime,
     loggedIn: botState.loggedIn,
+    statusMode: botState.status,
+    keepAliveUrl: publicAppUrl || null,
+    selfPingActive: !!selfPingInterval,
     memoryUsage: Math.round(process.memoryUsage().rss / 1024 / 1024) + 'MB',
     cpuUptime: Math.floor(process.uptime())
   });
@@ -1306,7 +1672,10 @@ app.get('/api/stats', (req, res) => {
     uptime: Math.floor(process.uptime()),
     botUptime: botState.uptime,
     guilds: botState.guilds.length,
-    loggedIn: botState.loggedIn
+    loggedIn: botState.loggedIn,
+    status: botState.status,
+    keepAliveUrl: publicAppUrl || null,
+    selfPingActive: !!selfPingInterval
   });
 });
 
@@ -1319,7 +1688,7 @@ async function initAutoLogin() {
   const tokenToUse = envToken || (saved && saved.token) || DEFAULT_TOKEN;
 
   if (tokenToUse) {
-    console.log('[BOT] Starting auto-login with default/saved token...');
+    console.log('[BOT] Starting auto-login with default/saved token (Default DND Mode)...');
     try {
       discordClient = createDiscordClient();
       setupClientEvents(tokenToUse, saved?.lastVC);
@@ -1339,12 +1708,17 @@ server.listen(PORT, () => {
   ║     🎮 Discord Online Controller v2.0         ║
   ║                                                ║
   ║   Dashboard: http://localhost:${PORT}             ║
-  ║   Status:    Running ✓                         ║
+  ║   Status:    Running ✓ (24/7 Mode)             ║
+  ║   Default:   DND (Do Not Disturb) ⛔           ║
   ║   Memory:    ~${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB                             ║
   ╚════════════════════════════════════════════════╝
   `);
   // Try auto-login if token is available
   initAutoLogin();
+  // Start 24/7 Watchdog to guard connection
+  startWatchdog();
+  // Start 24/7 Anti-Sleep self-pinging if URL is configured
+  startSelfPing();
 });
 
 // ========================

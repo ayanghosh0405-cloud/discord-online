@@ -2338,4 +2338,185 @@ body[data-theme="ocean"] {
   flex: 1;
 }
 
+/* ===== 24/7 KEEPALIVE & ANTI-SLEEP PANEL ===== */
+.keepalive-panel {
+  background: linear-gradient(135deg, rgba(17, 20, 32, 0.95) 0%, rgba(20, 24, 40, 0.95) 100%);
+  border: 1px solid rgba(59, 165, 93, 0.3) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  margin-bottom: 20px;
+  position: relative;
+  overflow: hidden;
+}
+
+.keepalive-panel::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #3ba55d, #5865f2, #3ba55d);
+  background-size: 200% 100%;
+  animation: shimmer 4s linear infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+.keepalive-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.keepalive-icon {
+  font-size: 1.25rem;
+}
+
+.keepalive-description {
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+
+.keepalive-url-row {
+  margin-bottom: 12px;
+}
+
+.keepalive-input-box {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.keepalive-input-box .text-input {
+  flex: 1;
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 0.82rem;
+  background: rgba(0, 0, 0, 0.4);
+  color: var(--text-accent);
+  border: 1px solid rgba(88, 101, 242, 0.3);
+}
+
+.keepalive-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+  font-size: 0.78rem;
+}
+
+.keepalive-stat {
+  color: var(--text-muted);
+}
+
+.keepalive-stat strong {
+  color: var(--green);
+}
+
+.keepalive-hint {
+  color: var(--text-muted);
+}
+
+/* Activity Badge Group */
+.activity-badge-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.badge-dnd {
+  background: rgba(237, 66, 69, 0.18);
+  color: #ff7b7d;
+  border: 1px solid rgba(237, 66, 69, 0.35);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+/* Discord Clean Mode Profile Card */
+.discord-clean-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  background: #11121d;
+  border: 1px solid rgba(237, 66, 69, 0.25);
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  animation: fadeIn 0.25s ease;
+  margin-top: 8px;
+}
+
+.discord-clean-avatar-wrap {
+  position: relative;
+  width: 50px;
+  height: 50px;
+  flex-shrink: 0;
+}
+
+.discord-clean-avatar {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+}
+
+.discord-clean-dot {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--red);
+  border: 3px solid #11121d;
+  box-shadow: 0 0 10px rgba(237, 66, 69, 0.9);
+}
+
+.discord-clean-dot::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 5px;
+  height: 2px;
+  background: #ffffff;
+  border-radius: 1px;
+}
+
+.discord-clean-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+}
+
+.discord-clean-title {
+  font-size: 0.96rem;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.discord-clean-desc {
+  font-size: 0.8rem;
+  color: #949ba4;
+}
+
+.discord-clean-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.74rem;
+  color: #ff7b7d;
+  font-weight: 600;
+  margin-top: 2px;
+}
+
 
